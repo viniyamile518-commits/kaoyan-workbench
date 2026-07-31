@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>考研工作台</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- MathJax for LaTeX rendering (数学题库公式渲染) -->
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']]
+      },
+      svg: { fontCache: 'global' }
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js" async></script>
+</head>
+<body>
+
+  <!-- 移动端遮罩 -->
+  <div id="overlay" class="overlay"></div>
+
+  <!-- 左侧导航 -->
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">📚 考研工作台</div>
+      <button id="sidebarToggle" class="sidebar-toggle" title="折叠/展开">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </button>
+    </div>
+
+    <!-- 倒计时小卡片 -->
+    <div id="countdownCard" class="countdown-card">
+      <span class="countdown-label">距离考研</span>
+      <span id="countdownDays" class="countdown-days">--</span>
+      <span class="countdown-label2">天</span>
+    </div>
+
+    <nav class="nav">
+      <!-- 工具 -->
+      <div class="nav-group">
+        <div class="nav-group-title">工具</div>
+        <a class="nav-item" data-module="dashboard">
+          <span class="nav-icon">📊</span><span class="nav-text">今日看板</span>
+        </a>
+        <a class="nav-item" data-module="review-improve">
+          <span class="nav-icon">📝</span><span class="nav-text">回顾与改进</span>
+        </a>
+        <a class="nav-item" data-module="memo">
+          <span class="nav-icon">📌</span><span class="nav-text">备忘录</span>
+        </a>
+        <a class="nav-item" data-module="quotes">
+          <span class="nav-icon">💬</span><span class="nav-text">我的收藏</span>
+        </a>
+      </div>
+
+      <!-- 学习规划 -->
+      <div class="nav-group">
+        <div class="nav-group-title">学习规划</div>
+        <a class="nav-item" data-module="study-planner">
+          <span class="nav-icon">🧠</span><span class="nav-text">复习规划师</span>
+        </a>
+      </div>
+
+      <!-- AI 助手 -->
+      <div class="nav-group">
+        <div class="nav-group-title">AI 助手</div>
+        <a class="nav-item nav-external" data-url="https://yuanbao.tencent.com/chat">
+          <span class="nav-icon">🟦</span><span class="nav-text">腾讯元宝</span>
+        </a>
+        <a class="nav-item nav-external" data-url="https://chat.deepseek.com/">
+          <span class="nav-icon">🐋</span><span class="nav-text">DeepSeek</span>
+        </a>
+        <a class="nav-item nav-external" data-url="https://www.doubao.com/chat/">
+          <span class="nav-icon">🫘</span><span class="nav-text">豆包</span>
+        </a>
+      </div>
+
+      <!-- 公共课 -->
+      <div class="nav-group">
+        <div class="nav-group-title">公共课</div>
+        <a class="nav-item nav-parent" data-toggle="math-sub">
+          <span class="nav-icon">🔢</span><span class="nav-text">数学（二）</span>
+          <span class="nav-arrow">▾</span>
+        </a>
+        <div class="nav-sub" id="math-sub">
+          <a class="nav-item" data-module="math-points">
+            <span class="nav-icon">🧮</span><span class="nav-text">知识点背诵</span>
+          </a>
+          <a class="nav-item" data-module="math-course">
+            <span class="nav-icon">🎬</span><span class="nav-text">网课入口</span>
+          </a>
+          <a class="nav-item" data-module="math-exam">
+            <span class="nav-icon">📑</span><span class="nav-text">真题</span>
+          </a>
+          <a class="nav-item" data-module="math-wrongbook">
+            <span class="nav-icon">📕</span><span class="nav-text">错题本</span>
+          </a>
+          <a class="nav-item" data-module="math-practice">
+            <span class="nav-icon">📋</span><span class="nav-text">练习记录</span>
+          </a>
+        </div>
+        <a class="nav-item nav-parent" data-toggle="eng-sub">
+          <span class="nav-icon">🔤</span><span class="nav-text">英语（一）</span>
+          <span class="nav-arrow">▾</span>
+        </a>
+        <div class="nav-sub" id="eng-sub">
+          <a class="nav-item" data-module="eng-course">
+            <span class="nav-icon">🎬</span><span class="nav-text">网课入口</span>
+          </a>
+          <a class="nav-item" data-module="eng-exam">
+            <span class="nav-icon">✏️</span><span class="nav-text">真题练习</span>
+          </a>
+          <a class="nav-item" data-module="eng-sentence">
+            <span class="nav-icon">🔍</span><span class="nav-text">长难句分析</span>
+          </a>
+          <a class="nav-item" data-module="eng-essay">
+            <span class="nav-icon">✍️</span><span class="nav-text">AI作文批改</span>
+          </a>
+        </div>
+        <a class="nav-item" data-module="politics">
+          <span class="nav-icon">🎓</span><span class="nav-text">政治</span>
+        </a>
+      </div>
+
+      <!-- 专业课 -->
+      <div class="nav-group">
+        <div class="nav-group-title">专业课</div>
+        <a class="nav-item" data-module="major-gis">
+          <span class="nav-icon">🗺️</span><span class="nav-text">GIS 系统</span>
+        </a>
+        <a class="nav-item" data-module="major-rs">
+          <span class="nav-icon">🛰️</span><span class="nav-text">RS 遥感</span>
+        </a>
+        <a class="nav-item" data-module="major-gps">
+          <span class="nav-icon">📡</span><span class="nav-text">GPS 定位</span>
+        </a>
+      </div>
+
+    </nav>
+
+    <div class="sidebar-footer">
+      <button id="syncBtn" class="btn-text">☁️ 云端同步</button>
+      <button id="exportBtn" class="btn-text">📤 导出数据</button>
+      <button id="importBtn" class="btn-text">📥 导入数据</button>
+      <input type="file" id="importFile" accept=".json" hidden>
+    </div>
+  </aside>
+
+  <!-- 右侧主内容 -->
+  <main id="main" class="main">
+    <header class="main-header">
+      <button id="mobileMenuBtn" class="mobile-menu-btn">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </button>
+      <h1 id="pageTitle" class="page-title">今日看板</h1>
+      <div id="headerExtra" class="header-extra"></div>
+    </header>
+    <!-- 励志语条 -->
+    <div id="quoteBar" class="quote-bar"></div>
+    <div id="content" class="content"></div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
