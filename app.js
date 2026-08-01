@@ -479,6 +479,18 @@ function daysBetween(fromStr, toStr) {
 }
 
 /**
+ * [v2/T02] ARCH §3.2 约定名 addDays()，实现委托给 dateOffset()。
+ * 保留两个名字是为了 TP4/TP5 按设计文档直接调用 addDays 时不必再改签名；
+ * 只有一份实现，不构成重复代码。非法基准日期回退为今天。
+ * @param {string} dateStr 'YYYY-MM-DD'
+ * @param {number} n       偏移天数，可为负
+ * @returns {string} 'YYYY-MM-DD'
+ */
+function addDays(dateStr, n) {
+  return dateOffset(parseDateStr(dateStr) ? dateStr : todayStr(), n);
+}
+
+/**
  * 数值钳制
  * @param {number} v
  * @param {number} lo
@@ -1380,13 +1392,23 @@ const modules = {};
 // [v2/T02] 原 `let dashClockInterval` 已由 TimerBus('view:dashClock') 接管：
 // switchModule 首行 clearScope('view:') 会自动回收，不再泄漏每秒定时器。
 
+/**
+ * [v2/T11] 「待改进」面板的回溯游标（天）。
+ * 默认 1 = 从昨天开始向前找；点击「查看更早」时按 DASH_IMPROVE_STEP 递增，
+ * 使 resolveImproveSource 能跳过已展示的那一天、继续向更早回溯。
+ * 每次进入 dashboard 模块重置为 1。
+ * @type {number}
+ */
+let _dashImproveMinBack = 1;
+
+/** [v2/T11] 「待改进」单次回溯窗口上限（天），与 ARCH §1.4 的 7 天口径一致。 */
+const DASH_IMPROVE_WINDOW = 7;
+
 modules['dashboard'] = (c) => {
   const examDate = Store.get('examDate', '2026-12-21');
   const days = daysUntil(examDate);
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-  const yImproves = Store.getByDate('improve', yesterday);
-  const improveItems = (yImproves && yImproves.items) ? yImproves.items : [];
   const todoData = Store.getByDate('todo', currentDate) || { items: [] };
+  _dashImproveMinBack = 1;   // [v2/T11] 每次进入首页重置「查看更早」游标
 
   c.innerHTML = `
     <div class="dash-clock">
@@ -1395,16 +1417,10 @@ modules['dashboard'] = (c) => {
       <div class="dash-clock-countdown">距离考研还有 ${days} 天 · ${examDate}</div>
     </div>
     <div class="dash-grid">
-      <!-- 左上：昨日待改进 -->
+      <!-- 左上：待改进（[v2/T11] 7 天回溯，见 resolveImproveSource） -->
       <div class="dash-panel">
-        <div class="dash-panel-title">⚠️ 昨日待改进</div>
-        <div class="dash-panel-body" id="dashImprove">
-          ${improveItems.length ? improveItems.map(i => `
-            <div style="padding:4px 0;font-size:13px;border-bottom:1px solid var(--border);">
-              ${i.text}
-            </div>
-          `).join('') : '<div class="empty-state"><div class="empty-state-text">昨日无待改进项</div></div>'}
-        </div>
+        <div class="dash-panel-title" id="dashImproveTitle">⚠️ 待改进</div>
+        <div class="dash-panel-body" id="dashImprove"></div>
       </div>
       <!-- 右上：每日目标填写 -->
       <div class="dash-panel">
@@ -1413,8 +1429,10 @@ modules['dashboard'] = (c) => {
           <input class="input" id="dashTodoInput" placeholder="添加今日目标..." onkeypress="if(event.key==='Enter')addDashTodo()" style="flex:1;font-size:13px;">
           <button class="btn btn-primary btn-sm" onclick="addDashTodo()">+</button>
         </div>
-        <div style="font-size:11px;color:var(--text-secondary);margin-bottom:6px;">
-          💡 可在「复习规划师」生成方案后点击"同步到今日目标"
+        <!-- [v2/T16] 规划师文本粘贴导入入口（决策 D3） -->
+        <div class="dash-import-bar">
+          <button class="btn btn-outline btn-sm" onclick="openImportDialog()">📥 导入规划结果</button>
+          <button class="btn btn-outline btn-sm" onclick="copyPlannerPrompt()">📋 复制 Prompt</button>
         </div>
         <div class="dash-panel-body" id="dashTodoList"></div>
       </div>
@@ -1456,6 +1474,7 @@ modules['dashboard'] = (c) => {
   updateDashClock();
   TimerBus.set('view:dashClock', updateDashClock, 1000);
 
+  renderDashImprove();
   renderDashTodo(todoData.items);
   updateDashPomoDisplay();
   renderDashPomoHistory();
@@ -1479,6 +1498,111 @@ function resolveImproveSource(baseDate, maxBack = 7) {
     }
   }
   return { date: null, daysAgo: 0, items: [], stale: false };
+}
+
+/**
+ * [v2/T11] 渲染首页「待改进」面板（ARCH §1.4）。
+ * - 以 _dashImproveMinBack 为起点向前回溯 DASH_IMPROVE_WINDOW 天，取第一个有内容的日期
+ * - daysAgo === 1 → 标题「⚠️ 待改进 · 昨日」
+ * - daysAgo  >  1 → 标题「⚠️ 待改进」+ .tag.orange「N 天前（YYYY-MM-DD）」（陈旧提示）
+ * - 窗口内无内容 → 空态，引导去「复盘改进」记录
+ * - 勾选状态写回源日期，跨天不清空、不迁移
+ * 仅操作面板内节点，不做全局 querySelector（§6.8 红线）。
+ * @returns {void}
+ */
+function renderDashImprove() {
+  const bodyEl = document.getElementById('dashImprove');
+  const titleEl = document.getElementById('dashImproveTitle');
+  if (!bodyEl) return;
+
+  const shift = Math.max(0, _dashImproveMinBack - 1);
+  const base = shift > 0 ? dateOffset(currentDate, -shift) : currentDate;
+  const src = resolveImproveSource(base, DASH_IMPROVE_WINDOW);
+  const daysAgo = src.date ? shift + src.daysAgo : 0;
+  const stale = daysAgo > 1;
+
+  // ---- 标题 ----
+  if (titleEl) {
+    if (!src.date) {
+      titleEl.innerHTML = '⚠️ 待改进';
+    } else if (stale) {
+      titleEl.innerHTML = `⚠️ 待改进 <span class="tag orange">${daysAgo} 天前 · ${src.date}</span>`;
+    } else {
+      titleEl.innerHTML = '⚠️ 待改进 · 昨日';
+    }
+  }
+
+  // ---- 空态 ----
+  if (!src.date) {
+    const scope = shift > 0
+      ? `更早 ${DASH_IMPROVE_WINDOW} 天内没有更多记录了`
+      : `近 ${DASH_IMPROVE_WINDOW} 天没有待改进记录，继续保持！`;
+    bodyEl.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon">📈</div>
+        <div class="empty-state-text">${scope}</div>
+        <div class="dash-improve-actions">
+          ${shift > 0 ? '<button class="btn btn-outline btn-sm" onclick="dashImproveReset()">回到最近</button>' : ''}
+          <button class="btn btn-outline btn-sm" onclick="switchModule('review-improve')">去记录 →</button>
+        </div>
+      </div>`;
+    return;
+  }
+
+  // ---- 列表 ----
+  const rows = src.items.map(item => `
+    <div class="dash-improve-item ${item.done ? 'done' : ''}">
+      <input type="checkbox" class="dash-todo-checkbox" ${item.done ? 'checked' : ''}
+             onclick="toggleDashImprove('${src.date}','${item.id}')">
+      <span class="dash-improve-text">${escapeHtml(item.text)}</span>
+    </div>`).join('');
+
+  const doneCount = src.items.filter(x => x.done).length;
+  bodyEl.innerHTML = `
+    ${rows}
+    <div class="dash-improve-foot">
+      <span class="dash-improve-count">${doneCount}/${src.items.length} 已处理</span>
+      <button class="btn btn-outline btn-sm" onclick="dashImproveMore()">查看更早</button>
+      ${shift > 0 ? '<button class="btn btn-outline btn-sm" onclick="dashImproveReset()">回到最近</button>' : ''}
+    </div>`;
+}
+
+/**
+ * [v2/T11] 勾选/取消勾选某条待改进项。状态归属源日期，不迁移到今天。
+ * @param {string} srcDate 源日期 'YYYY-MM-DD'
+ * @param {string} id 条目 id
+ * @returns {void}
+ */
+function toggleDashImprove(srcDate, id) {
+  const data = Store.getByDate('improve', srcDate) || { items: [] };
+  const item = (data.items || []).find(x => x && x.id === id);
+  if (!item) return;
+  item.done = !item.done;
+  Store.setByDate('improve', srcDate, data);
+  renderDashImprove();
+}
+
+/**
+ * [v2/T11] 「查看更早」：把回溯游标推到当前展示日期的前一天，再渲染一次。
+ * @returns {void}
+ */
+function dashImproveMore() {
+  const shift = Math.max(0, _dashImproveMinBack - 1);
+  const base = shift > 0 ? dateOffset(currentDate, -shift) : currentDate;
+  const src = resolveImproveSource(base, DASH_IMPROVE_WINDOW);
+  // 无内容时不再推进游标，避免无意义空翻页
+  if (!src.date) return;
+  _dashImproveMinBack = shift + src.daysAgo + 1;
+  renderDashImprove();
+}
+
+/**
+ * [v2/T11] 回到最近一次有内容的待改进日期。
+ * @returns {void}
+ */
+function dashImproveReset() {
+  _dashImproveMinBack = 1;
+  renderDashImprove();
 }
 
 function updateDashClock() {
@@ -1521,8 +1645,8 @@ function renderDashTodo(items) {
     listEl.innerHTML = undone.map(item => `
       <div class="dash-todo-item">
         <input type="checkbox" class="dash-todo-checkbox" onclick="toggleDashTodo('${item.id}')">
-        <span class="dash-todo-text">${item.text}</span>
-        ${item.source === 'ai' ? '<span class="dash-todo-source">AI</span>' : ''}
+        <span class="dash-todo-text">${escapeHtml(item.text)}</span>
+        ${item.source === 'planner' ? '<span class="dash-todo-source">规划师</span>' : ''}
         <button class="todo-delete" onclick="delDashTodo('${item.id}')">✕</button>
       </div>
     `).join('') || '<div style="color:var(--text-light);font-size:12px;padding:8px 0;">全部完成！🎉</div>';
@@ -1532,8 +1656,8 @@ function renderDashTodo(items) {
     kanbanEl.innerHTML = items.map(item => `
       <div class="dash-todo-item ${item.done ? 'done' : ''}">
         <input type="checkbox" class="dash-todo-checkbox" ${item.done ? 'checked' : ''} onclick="toggleDashTodo('${item.id}')">
-        <span class="dash-todo-text">${item.text}</span>
-        ${item.source === 'ai' ? '<span class="dash-todo-source">AI</span>' : ''}
+        <span class="dash-todo-text">${escapeHtml(item.text)}</span>
+        ${item.source === 'planner' ? '<span class="dash-todo-source">规划师</span>' : ''}
       </div>
     `).join('');
   }
@@ -3709,7 +3833,12 @@ ${content}
 }
 
 // ===== 番茄钟 =====
-let pomoTimer = null;
+// [v2/T11] 计时器迁移到 TimerBus 的 global: 作用域（ARCH §1.3-3）：
+//   - switchModule 首行只清 'view:'，因此番茄钟可跨模块存活
+//   - pomoTimer 退化为「是否在运行」的布尔标记，不再持有 setInterval 句柄
+/** [v2/T11] TimerBus 中番茄钟的固定名字（global 作用域，跨模块存活） */
+const POMO_TIMER_KEY = 'global:pomodoro';
+let pomoTimer = false;
 let pomoSeconds = 25 * 60;
 let pomoMode = 'work'; // work / break
 let pomoCount = 0;
@@ -3731,8 +3860,8 @@ modules['pomodoro'] = (c) => {
         <button class="btn btn-outline" onclick="pomoReset()">🔄 重置</button>
       </div>
       <div style="display:flex;gap:8px;justify-content:center;align-items:center;margin-bottom:12px;">
-        <button class="btn btn-outline btn-sm ${pomoMode==='work'?'active':''}" onclick="pomoSetMode('work')">专注</button>
-        <button class="btn btn-outline btn-sm ${pomoMode==='break'?'active':''}" onclick="pomoSetMode('break')">休息</button>
+        <button class="btn btn-outline btn-sm ${pomoMode==='work'?'active':''}" id="pomoModeWork" onclick="pomoSetMode('work')">专注</button>
+        <button class="btn btn-outline btn-sm ${pomoMode==='break'?'active':''}" id="pomoModeBreak" onclick="pomoSetMode('break')">休息</button>
       </div>
       <div style="display:flex;gap:12px;justify-content:center;align-items:center;margin-bottom:16px;">
         <label style="font-size:13px;color:var(--text-secondary);">专注</label>
@@ -3747,8 +3876,8 @@ modules['pomodoro'] = (c) => {
       <p style="font-size:12px;color:var(--text-light);">开始前填写，专注完成后会自动记录到这里</p>
     </div>
     <div class="stat-grid">
-      <div class="stat-card"><div class="stat-value">${todayRecords.count}</div><div class="stat-label">今日番茄数</div></div>
-      <div class="stat-card"><div class="stat-value">${todayRecords.total}</div><div class="stat-label">今日专注分钟</div></div>
+      <div class="stat-card"><div class="stat-value" id="pomoStatCount">${todayRecords.count}</div><div class="stat-label">今日番茄数</div></div>
+      <div class="stat-card"><div class="stat-value" id="pomoStatTotal">${todayRecords.total}</div><div class="stat-label">今日专注分钟</div></div>
     </div>
     <div class="card">
       <div class="card-title">📋 今日专注记录</div>
@@ -3782,51 +3911,73 @@ function pomoUpdateTime(mode, val) {
   }
 }
 
+/**
+ * [v2/T11] 启动番茄钟。走 TimerBus('global:pomodoro')，切换模块不会被回收。
+ * @returns {void}
+ */
 function pomoStart() {
   if (pomoTimer) return;
-  pomoTimer = setInterval(() => {
-    pomoSeconds--;
-    pomoRenderAll();
-    if (pomoSeconds <= 0) {
-      pomoFinish();
-    }
-  }, 1000);
+  pomoTimer = true;
+  TimerBus.set(POMO_TIMER_KEY, pomoTick, 1000);
   const status = document.getElementById('pomoStatus');
   if (status) status.textContent = pomoMode === 'work' ? '专注中...' : '休息中...';
   pomoRenderAll();
 }
 
-function pomoPause() {
-  if (pomoTimer) {
-    clearInterval(pomoTimer);
-    pomoTimer = null;
-    const status = document.getElementById('pomoStatus');
-    if (status) status.textContent = '已暂停';
-  }
+/**
+ * [v2/T11] 番茄钟每秒回调。抽成具名函数，方便 TimerBus 复用与单测。
+ * @returns {void}
+ */
+function pomoTick() {
+  pomoSeconds--;
+  pomoRenderAll();
+  if (pomoSeconds <= 0) pomoFinish();
 }
 
+/**
+ * [v2/T11] 暂停番茄钟（保留剩余秒数）。
+ * @returns {void}
+ */
+function pomoPause() {
+  if (!pomoTimer) return;
+  TimerBus.clear(POMO_TIMER_KEY);
+  pomoTimer = false;
+  const status = document.getElementById('pomoStatus');
+  if (status) status.textContent = '已暂停';
+}
+
+/**
+ * [v2/T11] 重置番茄钟到当前模式的满时长。
+ * @returns {void}
+ */
 function pomoReset() {
-  clearInterval(pomoTimer);
-  pomoTimer = null;
+  TimerBus.clear(POMO_TIMER_KEY);
+  pomoTimer = false;
   pomoSeconds = pomoMode === 'work' ? pomoWorkMin * 60 : pomoBreakMin * 60;
   pomoRenderAll();
   const status = document.getElementById('pomoStatus');
   if (status) status.textContent = pomoMode === 'work' ? '准备开始专注' : '准备休息';
 }
 
+/**
+ * [v2/T11] 切换番茄钟模式。
+ * 原实现用 document.querySelectorAll('.btn-sm') 全局扫描并按文案匹配，
+ * 会误伤其它模块的同类按钮（§6.8 红线）；改为按固定 id 精确定位。
+ * @param {'work'|'break'} mode
+ * @returns {void}
+ */
 function pomoSetMode(mode) {
   pomoMode = mode;
   pomoReset();
-  document.querySelectorAll('.btn-sm').forEach(b => {
-    if (b.textContent.trim() === '专注' || b.textContent.trim() === '休息') {
-      b.classList.toggle('active', (mode === 'work' && b.textContent.trim() === '专注') || (mode === 'break' && b.textContent.trim() === '休息'));
-    }
-  });
+  const wEl = document.getElementById('pomoModeWork');
+  const bEl = document.getElementById('pomoModeBreak');
+  if (wEl) wEl.classList.toggle('active', mode === 'work');
+  if (bEl) bEl.classList.toggle('active', mode === 'break');
 }
 
 function pomoFinish() {
-  clearInterval(pomoTimer);
-  pomoTimer = null;
+  TimerBus.clear(POMO_TIMER_KEY);
+  pomoTimer = false;
   if (pomoMode === 'work') {
     const data = Store.getByDate('pomodoro', currentDate) || { count: 0, total: 0, sessions: [] };
     data.count++;
@@ -3849,8 +4000,29 @@ function pomoFinish() {
   }
   updatePomoDisplay();
   updateDashPomoDisplay();
-  if (currentModule === 'pomodoro') switchModule('pomodoro');
-  if (currentModule === 'dashboard') { renderDashPomoHistory(); }
+  // [v2/T11] 原 `if (currentModule === 'pomodoro') switchModule('pomodoro')` 已移除：
+  // 局部刷新不得用 switchModule（§6.8 红线），改为直接重渲染受影响的两块区域。
+  if (currentModule === 'pomodoro') {
+    const rec = Store.getByDate('pomodoro', currentDate) || { count: 0, total: 0, sessions: [] };
+    renderPomoSessions(rec.sessions || []);
+    renderPomoHistory();
+    renderPomoStat(rec);
+    const status = document.getElementById('pomoStatus');
+    if (status) status.textContent = pomoMode === 'work' ? '准备开始专注' : '准备休息';
+  }
+  if (currentModule === 'dashboard') renderDashPomoHistory();
+}
+
+/**
+ * [v2/T11] 局部刷新番茄钟模块页的两个统计卡片（替代整页 switchModule 重建）。
+ * @param {{count:number,total:number}} rec 今日番茄记录
+ * @returns {void}
+ */
+function renderPomoStat(rec) {
+  const cEl = document.getElementById('pomoStatCount');
+  const tEl = document.getElementById('pomoStatTotal');
+  if (cEl) cEl.textContent = String(rec.count || 0);
+  if (tEl) tEl.textContent = String(rec.total || 0);
 }
 
 function updatePomoDisplay() {
@@ -4067,13 +4239,13 @@ function init() {
 // 番茄钟悬浮窗控制
 document.addEventListener('DOMContentLoaded', () => {
   init();
-  // 悬浮窗按钮
-  const float = document.getElementById('pomodoroFloat');
-  document.getElementById('pomoStart').addEventListener('click', pomoStart);
-  document.getElementById('pomoPause').addEventListener('click', pomoPause);
-  document.getElementById('pomoReset').addEventListener('click', pomoReset);
-  // 显示悬浮窗（当不在番茄钟模块时）
-  // 暂时隐藏
+  // 悬浮窗按钮（这些按钮仅在进入番茄钟模块后才存在于 DOM，故判空绑定）
+  const startEl = document.getElementById('pomoStart');
+  const pauseEl = document.getElementById('pomoPause');
+  const resetEl = document.getElementById('pomoReset');
+  if (startEl) startEl.addEventListener('click', pomoStart);
+  if (pauseEl) pauseEl.addEventListener('click', pomoPause);
+  if (resetEl) resetEl.addEventListener('click', pomoReset);
   updatePomoDisplay();
 });
 
