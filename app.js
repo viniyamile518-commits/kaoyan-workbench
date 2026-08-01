@@ -1458,6 +1458,12 @@ modules['dashboard'] = (c) => {
             <button onclick="dashPomoReset()">重置</button>
             <button onclick="dashPomoToggle()">${pomoMode === 'work' ? '休息' : '专注'}</button>
           </div>
+          <div class="dash-pomo-controls" style="margin-top:6px;flex-wrap:wrap;justify-content:center;">
+            <button class="dash-pomo-mini" onclick="pomoAdjust(-1)">−1分</button>
+            <button class="dash-pomo-mini" onclick="pomoAdjust(1)">+1分</button>
+            <button class="dash-pomo-mini" id="dashDirDown" onclick="dashPomoSetDir('down')" style="${pomoDir==='down'?'font-weight:700;':''}">↓倒计时</button>
+            <button class="dash-pomo-mini" id="dashDirUp" onclick="dashPomoSetDir('up')" style="${pomoDir==='up'?'font-weight:700;':''}">↑正计时</button>
+          </div>
           <div id="dashPomoStat" class="dash-pomo-stat"></div>
           <div id="dashPomoHistory" class="dash-pomo-history"></div>
         </div>
@@ -1700,6 +1706,14 @@ function dashPomoStart() {
 function dashPomoPause() { pomoPause(); }
 function dashPomoReset() { pomoReset(); }
 function dashPomoToggle() { pomoSetMode(pomoMode === 'work' ? 'break' : 'work'); updateDashPomoDisplay(); }
+function dashPomoSetDir(dir) {
+  pomoSetDir(dir);
+  updateDashPomoDisplay();
+  const dEl = document.getElementById('dashDirDown');
+  const uEl = document.getElementById('dashDirUp');
+  if (dEl) dEl.style.fontWeight = dir === 'down' ? '700' : '400';
+  if (uEl) uEl.style.fontWeight = dir === 'up' ? '700' : '400';
+}
 
 // 看板番茄钟：手动调节时间
 function dashPomoUpdateTime(mode, val) {
@@ -1752,7 +1766,7 @@ function updateDashPomoDisplay() {
   const tEl = document.getElementById('dashPomoTime');
   const mEl = document.getElementById('dashPomoMode');
   if (tEl) tEl.textContent = timeStr;
-  if (mEl) mEl.textContent = pomoMode === 'work' ? '专注模式' : '休息模式';
+  if (mEl) mEl.textContent = (pomoMode === 'work' ? '专注' : '休息') + (pomoDir === 'up' ? '·正计时' : '·倒计时');
 }
 
 // ===== 回顾与改进（合并今日回顾 + 待改进）=====
@@ -3855,6 +3869,8 @@ let pomoCount = 0;
 let pomoWorkMin = 25;
 let pomoBreakMin = 5;
 let pomoTask = ''; // 当前专注任务
+let pomoDir = 'down'; // 'down' 倒计时 / 'up' 正计时
+let pomoStarted = false; // 本次计时是否已开始（用于正计时重置时记录时长）
 
 modules['pomodoro'] = (c) => {
   const todayRecords = Store.getByDate('pomodoro', currentDate) || { count: 0, total: 0, sessions: [] };
@@ -3864,10 +3880,20 @@ modules['pomodoro'] = (c) => {
       <div class="card-title">🍅 番茄钟</div>
       <div id="pomoDisplay" style="font-size:72px;font-weight:800;color:var(--primary);font-variant-numeric:tabular-nums;margin:20px 0;">${pomoWorkMin}:00</div>
       <div style="font-size:14px;color:var(--text-secondary);margin-bottom:16px;" id="pomoStatus">准备开始专注</div>
-      <div style="display:flex;gap:8px;justify-content:center;margin-bottom:16px;">
+      <div style="display:flex;gap:8px;justify-content:center;margin-bottom:12px;">
         <button class="btn btn-primary" id="pomoStartBtn" onclick="pomoStart()">▶ 开始</button>
         <button class="btn btn-outline" id="pomoPauseBtn" onclick="pomoPause()">⏸ 暂停</button>
         <button class="btn btn-outline" onclick="pomoReset()">🔄 重置</button>
+      </div>
+      <div style="display:flex;gap:6px;justify-content:center;margin-bottom:16px;">
+        <button class="btn btn-outline btn-sm" onclick="pomoAdjust(-5)">−5分</button>
+        <button class="btn btn-outline btn-sm" onclick="pomoAdjust(-1)">−1分</button>
+        <button class="btn btn-outline btn-sm" onclick="pomoAdjust(1)">+1分</button>
+        <button class="btn btn-outline btn-sm" onclick="pomoAdjust(5)">+5分</button>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:center;align-items:center;margin-bottom:12px;">
+        <button class="btn btn-outline btn-sm ${pomoDir==='down'?'active':''}" id="pomoDirDown" onclick="pomoSetDir('down')">⏬ 倒计时</button>
+        <button class="btn btn-outline btn-sm ${pomoDir==='up'?'active':''}" id="pomoDirUp" onclick="pomoSetDir('up')">⏫ 正计时</button>
       </div>
       <div style="display:flex;gap:8px;justify-content:center;align-items:center;margin-bottom:12px;">
         <button class="btn btn-outline btn-sm ${pomoMode==='work'?'active':''}" id="pomoModeWork" onclick="pomoSetMode('work')">专注</button>
@@ -3928,9 +3954,12 @@ function pomoUpdateTime(mode, val) {
 function pomoStart() {
   if (pomoTimer) return;
   pomoTimer = true;
+  pomoStarted = true;
   TimerBus.set(POMO_TIMER_KEY, pomoTick, 1000);
   const status = document.getElementById('pomoStatus');
-  if (status) status.textContent = pomoMode === 'work' ? '专注中...' : '休息中...';
+  if (status) status.textContent = pomoDir === 'up'
+    ? (pomoMode === 'work' ? '计时中...' : '休息计时中...')
+    : (pomoMode === 'work' ? '专注中...' : '休息中...');
   pomoRenderAll();
 }
 
@@ -3939,9 +3968,16 @@ function pomoStart() {
  * @returns {void}
  */
 function pomoTick() {
-  pomoSeconds--;
-  pomoRenderAll();
-  if (pomoSeconds <= 0) pomoFinish();
+  if (pomoDir === 'up') {
+    // 正计时：累加，无自动结束
+    pomoSeconds++;
+    pomoRenderAll();
+  } else {
+    // 倒计时：递减，归零自动完成
+    pomoSeconds--;
+    pomoRenderAll();
+    if (pomoSeconds <= 0) pomoFinish();
+  }
 }
 
 /**
@@ -3963,10 +3999,20 @@ function pomoPause() {
 function pomoReset() {
   TimerBus.clear(POMO_TIMER_KEY);
   pomoTimer = false;
-  pomoSeconds = pomoMode === 'work' ? pomoWorkMin * 60 : pomoBreakMin * 60;
+  // 正计时模式下，重置前若已计时则记录本次时长
+  if (pomoDir === 'up' && pomoSeconds > 0 && pomoStarted) {
+    recordPomoSession(Math.max(1, Math.round(pomoSeconds / 60)));
+  }
+  pomoStarted = false;
+  // 倒计时：重置回当前模式满时长；正计时：归零重新计时
+  pomoSeconds = pomoDir === 'down'
+    ? (pomoMode === 'work' ? pomoWorkMin * 60 : pomoBreakMin * 60)
+    : 0;
   pomoRenderAll();
   const status = document.getElementById('pomoStatus');
-  if (status) status.textContent = pomoMode === 'work' ? '准备开始专注' : '准备休息';
+  if (status) status.textContent = pomoDir === 'down'
+    ? (pomoMode === 'work' ? '准备开始专注' : '准备休息')
+    : '准备开始计时';
 }
 
 /**
@@ -3985,38 +4031,63 @@ function pomoSetMode(mode) {
   if (bEl) bEl.classList.toggle('active', mode === 'break');
 }
 
+/** 切换倒计时/正计时方向（切换即重置计时） */
+function pomoSetDir(dir) {
+  pomoDir = dir;
+  pomoReset();
+  const dEl = document.getElementById('pomoDirDown');
+  const uEl = document.getElementById('pomoDirUp');
+  if (dEl) dEl.classList.toggle('active', dir === 'down');
+  if (uEl) uEl.classList.toggle('active', dir === 'up');
+}
+
+/** 手动调整当前计时（±分钟，运行中/暂停时均可），下限 0 */
+function pomoAdjust(deltaMin) {
+  pomoSeconds = Math.max(0, pomoSeconds + deltaMin * 60);
+  pomoRenderAll();
+  if (currentModule === 'dashboard') renderDashPomoHistory();
+}
+
+/** 记录一次专注时段到今日统计与历史（倒计时完成 / 正计时重置时共用） */
+function recordPomoSession(mins, msg) {
+  const data = Store.getByDate('pomodoro', currentDate) || { count: 0, total: 0, sessions: [] };
+  data.count++;
+  data.total += mins;
+  data.sessions = data.sessions || [];
+  data.sessions.unshift({
+    task: pomoTask || '未记录',
+    minutes: mins,
+    time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  });
+  Store.setByDate('pomodoro', currentDate, data);
+  pomoCount++;
+  toast(msg || `🎉 已记录 ${mins} 分钟专注！`);
+  if (currentModule === 'pomodoro') {
+    renderPomoSessions(data.sessions || []);
+    renderPomoHistory();
+    renderPomoStat(data);
+  }
+  if (currentModule === 'dashboard') renderDashPomoHistory();
+}
+
 function pomoFinish() {
   TimerBus.clear(POMO_TIMER_KEY);
   pomoTimer = false;
   if (pomoMode === 'work') {
-    const data = Store.getByDate('pomodoro', currentDate) || { count: 0, total: 0, sessions: [] };
-    data.count++;
-    data.total += pomoWorkMin;
-    data.sessions = data.sessions || [];
-    data.sessions.unshift({
-      task: pomoTask || '未记录',
-      minutes: pomoWorkMin,
-      time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-    });
-    Store.setByDate('pomodoro', currentDate, data);
-    pomoCount++;
-    toast('🎉 专注完成！休息一下~');
+    recordPomoSession(pomoWorkMin, '🎉 专注完成！休息一下~');
     pomoMode = 'break';
-    pomoSeconds = pomoBreakMin * 60;
   } else {
     toast('休息结束，继续专注！');
     pomoMode = 'work';
-    pomoSeconds = pomoWorkMin * 60;
   }
+  pomoSeconds = pomoMode === 'work' ? pomoWorkMin * 60 : pomoBreakMin * 60;
   updatePomoDisplay();
   updateDashPomoDisplay();
-  // [v2/T11] 原 `if (currentModule === 'pomodoro') switchModule('pomodoro')` 已移除：
-  // 局部刷新不得用 switchModule（§6.8 红线），改为直接重渲染受影响的两块区域。
+  const wEl = document.getElementById('pomoModeWork');
+  const bEl = document.getElementById('pomoModeBreak');
+  if (wEl) wEl.classList.toggle('active', pomoMode === 'work');
+  if (bEl) bEl.classList.toggle('active', pomoMode === 'break');
   if (currentModule === 'pomodoro') {
-    const rec = Store.getByDate('pomodoro', currentDate) || { count: 0, total: 0, sessions: [] };
-    renderPomoSessions(rec.sessions || []);
-    renderPomoHistory();
-    renderPomoStat(rec);
     const status = document.getElementById('pomoStatus');
     if (status) status.textContent = pomoMode === 'work' ? '准备开始专注' : '准备休息';
   }
