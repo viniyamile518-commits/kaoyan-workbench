@@ -1733,6 +1733,20 @@ modules['study-planner'] = (c) => {
     </div>
 
     <div class="card planner-expert-card">
+      <div class="card-title">📋 考研学习计划 · 共享模板</div>
+      <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;">
+        这是一份 WorkBuddy 共享的「制定考研学习计划」提示词模板，点下方按钮即可在 WorkBuddy（桌面端/网页版）中直接打开并基于你的备考情况生成计划。
+      </p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="openStudyPlanTemplate()">🚀 打开规划模板</button>
+        <button class="btn btn-outline" onclick="copyText('https://workbuddy.link/p/QSkX48VX06swlfW6zLakY6?ext2=copy_link')">🔗 复制链接</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-light);margin-top:8px;">
+        若已安装 WorkBuddy 桌面端，点击会直接唤起应用并预填该规划模板；未安装则在浏览器打开网页版。
+      </div>
+    </div>
+
+    <div class="card planner-expert-card">
       <div class="card-title">🧠 WorkBuddy 专家中心 · 考试复习规划师</div>
       <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;">
         点「🚀 唤起」会直接拉起你本机已安装的 WorkBuddy 桌面应用，并尝试自动切换到「考试复习规划师」专家开聊（已自动复制专家名作保底）。
@@ -1744,20 +1758,6 @@ modules['study-planner'] = (c) => {
       </div>
       <div style="font-size:11px;color:var(--text-light);margin-top:8px;">
         手动保底：WorkBuddy 左侧点「专家」→ 搜索框粘贴「考试复习规划师」→ 点「立即召唤」。首次需在桌面端「Claw设置 → 协议注册」启用 <b>workbuddy://</b>。
-      </div>
-    </div>
-
-    <div class="card planner-expert-card">
-      <div class="card-title">📋 考研学习计划 · 共享模板</div>
-      <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;">
-        这是一份 WorkBuddy 共享的「制定考研学习计划」提示词模板，点下方按钮即可在 WorkBuddy（桌面端/网页版）中直接打开并基于你的备考情况生成计划。
-      </p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-primary" onclick="openStudyPlanTemplate()">🚀 打开规划模板</button>
-        <button class="btn btn-outline" onclick="copyText('https://workbuddy.link/p/QSkX48VX06swlfW6zLakY6?ext2=copy_link')">🔗 复制链接</button>
-      </div>
-      <div style="font-size:11px;color:var(--text-light);margin-top:8px;">
-        若已安装 WorkBuddy 桌面端，点击会直接唤起应用并预填该规划模板；未安装则在浏览器打开网页版。
       </div>
     </div>
 
