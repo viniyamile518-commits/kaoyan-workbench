@@ -957,6 +957,8 @@ function updateDashClock() {
   const tEl = document.getElementById('dashTime');
   if (dEl) dEl.textContent = dateStr;
   if (tEl) tEl.textContent = timeStr;
+  // 看板番茄钟跟随全局计时器实时显示（与模块页/悬浮窗一致）
+  updateDashPomoDisplay();
 }
 
 function addDashTodo() {
