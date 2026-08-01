@@ -1231,9 +1231,11 @@ function delPlannerHistory(i) {
 // ----- 英语长难句 -----
 // ----- 英语长难句（颉斌斌66句每日滚动）-----
 modules['eng-sentence'] = (c) => {
+  const BASE = window.XBB66_BASE || {};
+  const THEORY = window.XBB66_THEORY || '';
   const xbbData = Store.get('xbb66', { current: 1, sentences: {} });
   const current = xbbData.current || 1;
-  const todaySentence = xbbData.sentences[current] || { en: '', grammar: '', zh: '' };
+  const todaySentence = xbbData.sentences[current] || BASE[current] || { en: '', grammar: '', zh: '' };
 
   c.innerHTML = `
     <div class="quick-links">
@@ -1244,6 +1246,10 @@ modules['eng-sentence'] = (c) => {
           <div class="quick-link-desc">B站课程全集</div>
         </div>
       </a>
+    </div>
+    <div class="card">
+      <div class="card-title" style="cursor:pointer;" onclick="xbbToggleTheory()">📚 理论篇 · 方法论（点击展开/收起）</div>
+      <div id="xbbTheory" style="display:none;max-height:380px;overflow:auto;font-size:13px;line-height:1.95;white-space:pre-wrap;color:var(--text);">${escapeHtml(THEORY)}</div>
     </div>
     <div class="card">
       <div class="card-title">📖 颉斌斌66句 · 每日滚动学习</div>
@@ -1294,9 +1300,14 @@ function xbbToggle(section) {
   if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
+function xbbToggleTheory() {
+  const el = document.getElementById('xbbTheory');
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
 function xbbEdit(num) {
   const data = Store.get('xbb66', { current: 1, sentences: {} });
-  const s = data.sentences[num] || { en: '', grammar: '', zh: '' };
+  const s = data.sentences[num] || (window.XBB66_BASE && window.XBB66_BASE[num]) || { en: '', grammar: '', zh: '' };
   modal(`编辑第 ${num} 句`, `
     <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">英文原句</label>
     <textarea class="textarea" id="xbbEnInput" style="margin-bottom:12px;">${s.en}</textarea>
