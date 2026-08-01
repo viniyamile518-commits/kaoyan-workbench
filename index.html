@@ -168,8 +168,9 @@
   </main>
 
   <!-- 颉斌斌66句真实内容（由 gen_xbb66.py 从 PDF 提取，生成 window.XBB66_BASE / XBB66_THEORY） -->
-  <script src="data/xbb66-data.js"></script>
-  <script src="data/xbb66-theory.js"></script>
+  <!-- ?v=2026-08-01-r2 强制让浏览器/CDN 重新拉取，避免看到缓存的旧版（错位内容） -->
+  <script src="data/xbb66-data.js?v=2026-08-01-r2"></script>
+  <script src="data/xbb66-theory.js?v=2026-08-01-r2"></script>
   <!-- v2 拆分：加载顺序强约束 app.js → app-memory.js → app-planner.js -->
   <script src="app.js"></script>
   <script src="app-memory.js"></script>
