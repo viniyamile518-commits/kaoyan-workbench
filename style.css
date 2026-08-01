@@ -1144,6 +1144,19 @@ body {
 }
 .phase-del:hover { color: #dc2626; background: #fef2f2; border-radius: 6px; }
 
+.goal-clear {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: transparent;
+  color: var(--text-light);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.goal-clear:hover { color: #dc2626; border-color: #dc2626; background: #fef2f2; }
+
 /* ===== 导航子菜单 ===== */
 .nav-parent { cursor: pointer; }
 .nav-arrow {
