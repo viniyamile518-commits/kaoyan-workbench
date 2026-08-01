@@ -5432,13 +5432,14 @@ function pomoStart() {
   if (pomoTimer) return;
   pomoTimer = setInterval(() => {
     pomoSeconds--;
-    updatePomoDisplay();
+    pomoRenderAll();
     if (pomoSeconds <= 0) {
       pomoFinish();
     }
   }, 1000);
   const status = document.getElementById('pomoStatus');
   if (status) status.textContent = pomoMode === 'work' ? '专注中...' : '休息中...';
+  pomoRenderAll();
 }
 
 function pomoPause() {
@@ -5454,7 +5455,7 @@ function pomoReset() {
   clearInterval(pomoTimer);
   pomoTimer = null;
   pomoSeconds = pomoMode === 'work' ? pomoWorkMin * 60 : pomoBreakMin * 60;
-  updatePomoDisplay();
+  pomoRenderAll();
   const status = document.getElementById('pomoStatus');
   if (status) status.textContent = pomoMode === 'work' ? '准备开始专注' : '准备休息';
 }
@@ -5493,8 +5494,9 @@ function pomoFinish() {
     pomoSeconds = pomoWorkMin * 60;
   }
   updatePomoDisplay();
+  updateDashPomoDisplay();
   if (currentModule === 'pomodoro') switchModule('pomodoro');
-  if (currentModule === 'dashboard') { updateDashPomoDisplay(); renderDashPomoHistory(); }
+  if (currentModule === 'dashboard') { renderDashPomoHistory(); }
 }
 
 function updatePomoDisplay() {
@@ -5505,6 +5507,12 @@ function updatePomoDisplay() {
   // 悬浮窗
   const float = document.getElementById('pomoTime');
   if (float) float.textContent = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+}
+
+// 统一刷新所有番茄钟显示：模块页 + 悬浮窗 + 看板，保证多入口倒计时同步
+function pomoRenderAll() {
+  updatePomoDisplay();
+  updateDashPomoDisplay();
 }
 
 function renderPomoSessions(sessions) {
