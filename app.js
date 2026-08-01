@@ -517,17 +517,28 @@ modules['dashboard'] = (c) => {
       </div>
       <!-- 左下：番茄钟 -->
       <div class="dash-panel">
-        <div class="dash-panel-title">🍅 番茄钟</div>
-        <div class="dash-pomo">
+        <div class="dash-panel-title">
+          🍅 番茄钟
+          <a class="dash-link" onclick="switchModule('pomodoro')" style="margin-left:auto;font-size:11px;color:var(--primary);cursor:pointer;">完整历史 →</a>
+        </div>
+        <div class="dash-panel-body dash-pomo">
           <div class="dash-pomo-mode" id="dashPomoMode">专注模式</div>
           <div class="dash-pomo-time" id="dashPomoTime">25:00</div>
           <input class="input" id="dashPomoTask" placeholder="当前任务..." style="max-width:180px;font-size:12px;text-align:center;margin-top:6px;" value="${pomoTask || ''}">
+          <div class="dash-pomo-settings">
+            <span>专注</span>
+            <input type="number" id="dashPomoWork" value="${pomoWorkMin}" min="1" max="120" class="dash-pomo-input" onchange="dashPomoUpdateTime('work',this.value)"><span>分</span>
+            <span style="margin-left:8px;">休息</span>
+            <input type="number" id="dashPomoBreak" value="${pomoBreakMin}" min="1" max="60" class="dash-pomo-input" onchange="dashPomoUpdateTime('break',this.value)"><span>分</span>
+          </div>
           <div class="dash-pomo-controls">
             <button onclick="dashPomoStart()">开始</button>
             <button onclick="dashPomoPause()">暂停</button>
             <button onclick="dashPomoReset()">重置</button>
             <button onclick="dashPomoToggle()">${pomoMode === 'work' ? '休息' : '专注'}</button>
           </div>
+          <div id="dashPomoStat" class="dash-pomo-stat"></div>
+          <div id="dashPomoHistory" class="dash-pomo-history"></div>
         </div>
       </div>
       <!-- 右下：每日目标看板（划掉效果） -->
@@ -545,6 +556,7 @@ modules['dashboard'] = (c) => {
 
   renderDashTodo(todoData.items);
   updateDashPomoDisplay();
+  renderDashPomoHistory();
 };
 
 function updateDashClock() {
@@ -640,6 +652,50 @@ function dashPomoStart() {
 function dashPomoPause() { pomoPause(); }
 function dashPomoReset() { pomoReset(); }
 function dashPomoToggle() { pomoSetMode(pomoMode === 'work' ? 'break' : 'work'); updateDashPomoDisplay(); }
+
+// 看板番茄钟：手动调节时间
+function dashPomoUpdateTime(mode, val) {
+  val = parseInt(val) || 1;
+  if (val < 1) val = 1;
+  if (mode === 'work') {
+    pomoWorkMin = val;
+    const inp = document.getElementById('dashPomoWork');
+    if (inp) inp.value = val;
+    if (pomoMode === 'work' && !pomoTimer) {
+      pomoSeconds = val * 60;
+      updateDashPomoDisplay();
+    }
+  } else {
+    pomoBreakMin = val;
+    const inp = document.getElementById('dashPomoBreak');
+    if (inp) inp.value = val;
+    if (pomoMode === 'break' && !pomoTimer) {
+      pomoSeconds = val * 60;
+      updateDashPomoDisplay();
+    }
+  }
+}
+
+// 看板番茄钟：渲染今日统计 + 最近记录
+function renderDashPomoHistory() {
+  const statEl = document.getElementById('dashPomoStat');
+  const histEl = document.getElementById('dashPomoHistory');
+  if (!histEl) return;
+  const rec = Store.getByDate('pomodoro', currentDate) || { count: 0, total: 0, sessions: [] };
+  if (statEl) statEl.textContent = `今日 🍅 ${rec.count} 个 · 专注 ${rec.total} 分钟`;
+  const sessions = rec.sessions || [];
+  if (!sessions.length) {
+    histEl.innerHTML = '<div style="font-size:11px;color:var(--text-light);text-align:center;padding:6px;">完成后这里显示专注记录</div>';
+    return;
+  }
+  histEl.innerHTML = sessions.slice(0, 5).map(s => `
+    <div class="dash-pomo-history-item">
+      <span>🍅</span>
+      <span class="t">${s.task}</span>
+      <span class="m">${s.minutes}分 ${s.time}</span>
+    </div>
+  `).join('');
+}
 
 function updateDashPomoDisplay() {
   const m = Math.floor(pomoSeconds / 60);
@@ -4331,6 +4387,7 @@ function pomoFinish() {
   }
   updatePomoDisplay();
   if (currentModule === 'pomodoro') switchModule('pomodoro');
+  if (currentModule === 'dashboard') { updateDashPomoDisplay(); renderDashPomoHistory(); }
 }
 
 function updatePomoDisplay() {
