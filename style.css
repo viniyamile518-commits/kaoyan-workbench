@@ -1619,3 +1619,356 @@ body {
 .eng-type-year-name { font-weight:600; font-size:13px; min-width:54px; }
 .btn-ghost { background:transparent; border:1px solid var(--border); color:var(--text-secondary); padding:2px 6px; }
 .btn-ghost:hover { background:var(--primary-light); border-color:var(--primary); }
+
+/* ══════════════════════════════════════════════════════════════
+ * [v2/TP4-TP5] T11–T17 新增样式
+ * §6.8 红线：新增样式一律追加在文件末尾，不改动既有选择器，
+ * 避免与外部并行开发（英语 PDF 区）的样式产生 diff 冲突。
+ * ══════════════════════════════════════════════════════════════ */
+
+/* ---------- T11 首页四宫格：待改进面板 ---------- */
+.dash-improve-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.dash-improve-item:last-of-type { border-bottom: none; }
+.dash-improve-item .dash-improve-text { flex: 1; min-width: 0; word-break: break-word; }
+.dash-improve-item.done .dash-improve-text {
+  text-decoration: line-through;
+  color: var(--text-light);
+}
+.dash-improve-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  flex-wrap: wrap;
+}
+.dash-improve-count {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.dash-improve-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+/* ---------- T16 首页规划师导入入口 ---------- */
+.dash-import-bar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.dash-import-bar .btn { flex: 1 1 auto; font-size: 12px; white-space: nowrap; }
+
+/* ---------- T16 导入预览弹窗 ---------- */
+.import-dialog-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .45);
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.import-dialog {
+  background: var(--card-bg, #fff);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 640px;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .22);
+}
+.import-dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 700;
+  font-size: 15px;
+}
+.import-dialog-head .import-close {
+  margin-left: auto;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  font-size: 18px;
+  color: var(--text-light);
+  line-height: 1;
+}
+.import-dialog-body { padding: 14px 16px; overflow-y: auto; flex: 1; }
+.import-dialog-foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.import-textarea {
+  width: 100%;
+  min-height: 200px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.import-preview-day {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.import-preview-date {
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.import-preview-task {
+  font-size: 12.5px;
+  padding: 3px 0 3px 16px;
+  position: relative;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+.import-preview-task::before {
+  content: '·';
+  position: absolute;
+  left: 5px;
+  color: var(--primary);
+  font-weight: 700;
+}
+.import-warn {
+  font-size: 12px;
+  color: var(--warning);
+  background: rgba(245, 158, 11, .09);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  line-height: 1.6;
+}
+.import-summary {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+  line-height: 1.6;
+}
+
+/* ---------- T15 规划师外链卡片 ---------- */
+.planner-link-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card-bg, #fff);
+  flex-wrap: wrap;
+}
+.planner-link-icon { font-size: 22px; line-height: 1; }
+.planner-link-main { flex: 1; min-width: 160px; }
+.planner-link-name { font-weight: 700; font-size: 14px; margin-bottom: 2px; }
+.planner-link-url {
+  font-size: 11.5px;
+  color: var(--text-light);
+  word-break: break-all;
+  line-height: 1.5;
+}
+.planner-link-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.planner-step {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  font-size: 13px;
+  line-height: 1.65;
+  align-items: flex-start;
+}
+.planner-step-no {
+  flex: 0 0 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--primary-light);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------- T12/T13 通用组件：栏目卡 / 外链组 / 挖空卡 ---------- */
+.hub-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+.hub-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--card-bg, #fff);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hub-card-title { font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 6px; }
+.hub-card-desc { font-size: 11.5px; color: var(--text-secondary); line-height: 1.55; flex: 1; }
+.hub-card-links { display: flex; gap: 6px; flex-wrap: wrap; }
+.hub-card-links a.btn { text-decoration: none; }
+
+.link-group { margin-bottom: 14px; }
+.link-group-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.link-group-items { display: flex; gap: 8px; flex-wrap: wrap; }
+.link-group-items a.btn { text-decoration: none; }
+.link-group-empty { font-size: 12px; color: var(--text-light); }
+
+.cloze-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: var(--card-bg, #fff);
+}
+.cloze-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  flex-wrap: wrap;
+}
+.cloze-card-chapter { font-size: 11px; color: var(--text-light); font-weight: 400; }
+.cloze-body { font-size: 13.5px; line-height: 1.85; word-break: break-word; }
+.cloze-blank {
+  display: inline-block;
+  min-width: 48px;
+  padding: 0 6px;
+  margin: 0 2px;
+  border-bottom: 2px solid var(--primary);
+  color: transparent;
+  cursor: pointer;
+  border-radius: 3px;
+  background: var(--primary-light);
+  user-select: none;
+  transition: color .15s ease, background .15s ease;
+}
+.cloze-blank.revealed {
+  color: var(--primary);
+  font-weight: 700;
+  background: transparent;
+  cursor: default;
+  user-select: text;
+}
+.cloze-card-foot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  flex-wrap: wrap;
+}
+.cloze-card-foot .cloze-progress { flex: 1; font-size: 11px; color: var(--text-secondary); }
+
+/* ---------- T14 英语长难句三段式 ---------- */
+.xbb-stage { margin-bottom: 14px; }
+.xbb-sentence {
+  font-size: 16px;
+  line-height: 1.95;
+  padding: 14px 16px;
+  border-left: 3px solid var(--primary);
+  background: var(--primary-light);
+  border-radius: 0 8px 8px 0;
+  word-break: break-word;
+}
+.xbb-meta {
+  font-size: 11.5px;
+  color: var(--text-light);
+  margin-top: 6px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.xbb-structure {
+  font-size: 13.5px;
+  line-height: 1.9;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg, #fff);
+}
+.xbb-translation {
+  font-size: 14px;
+  line-height: 1.85;
+  padding: 12px 14px;
+  border-left: 3px solid var(--success);
+  background: rgba(16, 185, 129, .07);
+  border-radius: 0 8px 8px 0;
+  word-break: break-word;
+}
+.xbb-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.xbb-nav .xbb-pos { flex: 1; font-size: 12px; color: var(--text-secondary); text-align: center; }
+
+/* ══════════════════════════════════════════════════════════════
+ * [v2/T17] 响应式断点：900px（平板 / 小笔记本）
+ * 既有 768px 断点保持不变，此处只补中间档，
+ * 避免首页四宫格在 880px 宽度下被挤压变形。
+ * ══════════════════════════════════════════════════════════════ */
+@media (max-width: 900px) {
+  .dash-grid { grid-template-columns: 1fr; }
+  .hub-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  .dash-import-bar .btn { flex: 1 1 100%; }
+  .planner-link-card { align-items: flex-start; }
+  .planner-link-actions { width: 100%; }
+  .import-dialog { max-width: 100%; }
+  .xbb-sentence { font-size: 15px; }
+}
+
+@media (max-width: 480px) {
+  .hub-grid { grid-template-columns: 1fr; }
+  .cloze-card-foot .btn,
+  .dash-improve-foot .btn { flex: 1 1 auto; }
+  .import-dialog-foot .btn { flex: 1 1 100%; }
+  .xbb-sentence { font-size: 14px; line-height: 1.9; }
+  .xbb-nav .btn { flex: 1 1 auto; }
+}
