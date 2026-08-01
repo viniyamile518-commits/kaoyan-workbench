@@ -152,7 +152,8 @@ function renderQuoteList(items) {
     el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">💬</div><div class="empty-state-text">还没有收藏的句子，去顶部点☆收藏吧~</div></div>';
     return;
   }
-  el.innerHTML = items.reverse().map(q => `
+  // [v2/T04-5] 原为 items.reverse()，原地反转会污染调用方数组导致列表反复抖动
+  el.innerHTML = [...items].reverse().map(q => `
     <div class="sentence-card">
       <div style="font-size:14px;line-height:1.8;font-weight:500;">"${q.content}"</div>
       <div style="font-size:12px;color:var(--text-secondary);margin-top:8px;">— ${q.source} ${q.time ? `· ${fmtDate(q.time)}` : ''}</div>
@@ -318,7 +319,8 @@ const CloudSync = {
 
   // 收集本地所有 ky_ 数据
   // 绝不上传到云端的敏感 key（含密钥/凭据）
-  SECRET_KEYS: ['ky_syncConfig', 'ky_aiConfig'],
+  // [v2/T03] ky_backup_v1 为 v1 全量快照（可达数百 KB），排除以免撑爆同步文件
+  SECRET_KEYS: ['ky_syncConfig', 'ky_aiConfig', 'ky_backup_v1'],
 
   collectLocal() {
     const data = {};
@@ -357,9 +359,17 @@ const CloudSync = {
 };
 
 // ===== 工具函数 =====
-const today = () => new Date().toISOString().slice(0, 10);
+// [v2/T02] today() 由 UTC 切片改为委托 todayStr()（本地时区）。
+// 理由：ARCH §6.2 规定「今天」一律走 todayStr()；若两者不一致，
+// 本地 00:00–08:00 期间 today() 会返回前一天，导致同一天的数据被写入两个日期键。
+const today = () => todayStr();
 const now = () => new Date().toISOString();
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+/**
+ * 生成短唯一 id
+ * @param {string} [prefix=''] 前缀，如 'pg_'
+ * @returns {string}
+ */
+const uid = (prefix = '') => prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const daysUntil = (dateStr) => {
   const d = new Date(dateStr + 'T00:00:00');
   const now = new Date(new Date().toDateString());
@@ -408,12 +418,496 @@ function el(tag, cls, html) {
   return e;
 }
 
+/* ══════════════════════════════════════════════════════════════
+ * [v2/T02] 工具层：日期 · 数值 · 确定性随机 · 每日轮换
+ * 约定（ARCH §6.2）：日期一律 'YYYY-MM-DD' 本地时区字符串；
+ * 日期运算一律走 dateOffset / daysBetween，禁止手写毫秒加减。
+ * ══════════════════════════════════════════════════════════════ */
+
+/**
+ * 今天的本地日期字符串
+ * @returns {string} 'YYYY-MM-DD'
+ */
+function todayStr() {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/**
+ * 将 'YYYY-MM-DD' 解析为本地零点 Date（规避 UTC 解析陷阱）
+ * @param {string} dateStr
+ * @returns {Date|null}
+ */
+function parseDateStr(dateStr) {
+  if (!dateStr || typeof dateStr !== 'string') return null;
+  const m = dateStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
+/**
+ * 日期偏移（用 setDate 构造，天然规避夏令时/时区陷阱，ARCH R5）
+ * @param {string} dateStr 'YYYY-MM-DD'
+ * @param {number} days    可为负
+ * @returns {string} 'YYYY-MM-DD'
+ */
+function dateOffset(dateStr, days) {
+  const d = parseDateStr(dateStr);
+  if (!d) return dateStr;
+  d.setDate(d.getDate() + (Number(days) || 0));
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/**
+ * 两个日期相差天数（to - from）
+ * @param {string} fromStr
+ * @param {string} toStr
+ * @returns {number} 整数天数；任一无效返回 0
+ */
+function daysBetween(fromStr, toStr) {
+  const a = parseDateStr(fromStr);
+  const b = parseDateStr(toStr);
+  if (!a || !b) return 0;
+  // 归一到 UTC 零点做差，消除夏令时导致的 23/25 小时误差
+  const ua = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+  const ub = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((ub - ua) / 86400000);
+}
+
+/**
+ * 数值钳制
+ * @param {number} v
+ * @param {number} lo
+ * @param {number} hi
+ * @returns {number}
+ */
+function clamp(v, lo, hi) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return lo;
+  return Math.min(Math.max(n, lo), hi);
+}
+
+/**
+ * FNV-1a 字符串哈希
+ * @param {string} str
+ * @returns {number} uint32
+ */
+function hashStr(str) {
+  const s = String(str == null ? '' : str);
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/**
+ * mulberry32 确定性伪随机数发生器
+ * @param {number} seed
+ * @returns {() => number} 每次返回 [0,1)
+ */
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * 确定性伪随机单选：同一天同一 salt 恒定，隔天跳变
+ * @template T
+ * @param {T[]} arr
+ * @param {string} dateStr
+ * @param {string} [saltKey='']
+ * @returns {T|null}
+ */
+function dailyPick(arr, dateStr, saltKey = '') {
+  if (!arr || !arr.length) return null;
+  return arr[hashStr(dateStr + '|' + saltKey) % arr.length];
+}
+
+/**
+ * 确定性伪随机多选（不重复），基于种子 Fisher-Yates
+ * @template T
+ * @param {T[]} arr
+ * @param {string} dateStr
+ * @param {string} saltKey
+ * @param {number} n
+ * @returns {T[]}
+ */
+function dailyPickN(arr, dateStr, saltKey, n) {
+  if (!arr || !arr.length) return [];
+  const rnd = mulberry32(hashStr(dateStr + '|' + saltKey));
+  const pool = arr.slice();
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    const tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
+  }
+  return pool.slice(0, Math.min(Math.max(0, n | 0), pool.length));
+}
+
+/**
+ * 严格顺序循环轮换：Day1 → DayN → Day1
+ * @template T
+ * @param {T[]} arr
+ * @param {string} dateStr
+ * @param {string} startDateStr
+ * @param {number} [manualOffset=0]
+ * @returns {{item:T, index:number, total:number}|null}
+ */
+function rotateByDate(arr, dateStr, startDateStr, manualOffset = 0) {
+  if (!arr || !arr.length) return null;
+  const d = daysBetween(startDateStr || dateStr, dateStr);
+  const n = arr.length;
+  const idx = (((d + (Number(manualOffset) || 0)) % n) + n) % n;
+  return { item: arr[idx], index: idx, total: n };
+}
+
+/* ══════════════════════════════════════════════════════════════
+ * [v2/T02] TimerBus：统一定时器总线
+ * 作用域约定：'view:'   随模块切换销毁（switchModule 首行 clearScope）
+ *             'global:' 应用级常驻，仅用户显式停止才清（如番茄钟）
+ * ══════════════════════════════════════════════════════════════ */
+const TimerBus = {
+  _h: Object.create(null),
+
+  /**
+   * 注册（并替换同名）定时器
+   * @param {string} name 形如 'view:dashClock' / 'global:pomodoro'
+   * @param {() => void} fn
+   * @param {number} ms
+   * @returns {string} name
+   */
+  set(name, fn, ms) {
+    this.clear(name);
+    this._h[name] = setInterval(fn, ms);
+    return name;
+  },
+
+  /**
+   * 清除指定定时器
+   * @param {string} name
+   */
+  clear(name) {
+    if (this._h[name]) {
+      clearInterval(this._h[name]);
+      delete this._h[name];
+    }
+  },
+
+  /**
+   * 清除某一作用域下全部定时器
+   * @param {string} prefix 'view:' | 'global:'
+   */
+  clearScope(prefix) {
+    Object.keys(this._h)
+      .filter(k => k.indexOf(prefix) === 0)
+      .forEach(k => this.clear(k));
+  },
+
+  /** @returns {string[]} 当前存活的定时器名 */
+  list() { return Object.keys(this._h); },
+
+  /**
+   * 判断某定时器是否存活
+   * @param {string} name
+   * @returns {boolean}
+   */
+  has(name) { return !!this._h[name]; }
+};
+
+/* ══════════════════════════════════════════════════════════════
+ * [v2/T05] DataLoader：内容资产统一加载层
+ * 路径约定（ARCH §6.6）：
+ *   major_knowledge / eng_sentences_66 / politics_questions → /data/
+ *   markji_knowledge                                        → /（根目录）
+ * 失败降级：返回 fallback + toast，绝不抛出导致模块白屏。
+ * ══════════════════════════════════════════════════════════════ */
+const DataLoader = {
+  /** @type {Map<string, any>} 已加载结果缓存 */
+  _cache: new Map(),
+  /** @type {Map<string, Promise<any>>} 进行中的请求，防止并发重复拉取 */
+  _inflight: new Map(),
+  /** @type {Set<string>} 已提示过失败的路径，避免 toast 刷屏 */
+  _warned: new Set(),
+
+  /**
+   * 带内存缓存的 JSON 加载
+   * @template T
+   * @param {string} path 形如 '/data/major_knowledge.json'
+   * @param {T} [fallback=null] 失败时返回值
+   * @returns {Promise<T>}
+   */
+  async load(path, fallback = null) {
+    if (this._cache.has(path)) return this._cache.get(path);
+    if (this._inflight.has(path)) return this._inflight.get(path);
+
+    const p = (async () => {
+      try {
+        const res = await fetch(path, { cache: 'no-cache' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const json = await res.json();
+        this._cache.set(path, json);
+        return json;
+      } catch (err) {
+        console.error('[DataLoader] 加载失败:', path, err);
+        if (!this._warned.has(path)) {
+          this._warned.add(path);
+          if (typeof toast === 'function') toast('内容加载失败，请检查服务是否启动');
+        }
+        return fallback;
+      } finally {
+        this._inflight.delete(path);
+      }
+    })();
+
+    this._inflight.set(path, p);
+    return p;
+  },
+
+  /**
+   * 专业课知识树：34 章 / 255 知识点
+   * @returns {Promise<{meta:object, subjects:Array}>}
+   */
+  majorKnowledge() {
+    return this.load('/data/major_knowledge.json', { meta: {}, subjects: [] });
+  },
+
+  /**
+   * 英语长难句 66 句
+   * @returns {Promise<{meta:object, sentences:Array}>}
+   */
+  engSentences() {
+    return this.load('/data/eng_sentences_66.json', { meta: {}, sentences: [] });
+  },
+
+  /**
+   * 政治题库 125 题
+   * @returns {Promise<{meta:object, questions:Array}>}
+   */
+  politicsQuestions() {
+    return this.load('/data/politics_questions.json', { meta: {}, questions: [] });
+  },
+
+  /**
+   * markji 数学公式卡片 516 条（注意：在项目根目录，不在 data/）
+   * @returns {Promise<{totalItems:number, items:Array}>}
+   */
+  markjiCards() {
+    return this.load('/markji_knowledge.json', { totalItems: 0, items: [] });
+  },
+
+  /** 清空全部缓存（调试用） */
+  clearCache() {
+    this._cache.clear();
+    this._inflight.clear();
+    this._warned.clear();
+  }
+};
+
+/* ══════════════════════════════════════════════════════════════
+ * [v2/T04-1] 作用域化进度条 patch（ARCH §1.6 A6-bug）
+ * v1 缺陷：document.querySelector('.kp-progress-text') 永远命中页面
+ *          第一个进度条 —— 第 3 章的操作改了第 1 章的条。
+ * v2 修法：所有进度条外层必须带唯一 id（形如 'kp-sec-gis-p1'），
+ *          查询严格限定在该 scope 内，并且只做局部 patch，
+ *          禁止用 switchModule(currentModule) 整页重渲染。
+ * ══════════════════════════════════════════════════════════════ */
+
+/**
+ * 局部刷新某个进度条（作用域化，绝不触碰其他进度条）
+ * @param {string} scopeId 进度条容器元素 id，如 'kp-sec-gis-p1'
+ * @param {number} done    已完成数
+ * @param {number} total   总数
+ * @param {string} [label] 可选后缀文案，如 '已整理'；省略时输出 'done/total（pct%）'
+ * @returns {boolean} 是否命中并完成 patch（视图已切走时返回 false）
+ */
+function patchProgress(scopeId, done, total, label = '') {
+  const scope = document.getElementById(scopeId);
+  if (!scope) return false;                 // 视图已切走，静默返回
+  const d = Number(done) || 0;
+  const t = Number(total) || 0;
+  const pct = t ? Math.round(d / t * 100) : 0;
+  const fill = scope.querySelector('.kp-progress-fill');
+  const text = scope.querySelector('.kp-progress-text');
+  if (fill) fill.style.width = pct + '%';
+  if (text) text.textContent = label ? `${d}/${t} ${label}（${pct}%）` : `${d}/${t}（${pct}%）`;
+  return true;
+}
+
+/* ══════════════════════════════════════════════════════════════
+ * [v2/T03] 数据模型迁移 v1 → v2
+ * 核心策略：追加优先于改写，归档优先于删除，懒生成优先于批量写入。
+ * 幂等：连跑 N 次结果一致；失败不阻塞启动（仅记录日志）。
+ * ══════════════════════════════════════════════════════════════ */
+const SCHEMA_VERSION = 2;
+
+/**
+ * 归一化课程分组数据
+ * ⚠️ 运行时契约以 v1 的 getCourseData() 为准：`{ groups: CourseGroup[] }`，
+ *    而非 ARCH §3.1 声明的裸数组。此处同时写入 name 与 title 双字段，
+ *    使 v1 渲染器（读 name）与 v2 renderLinkGroup（读 title）均可工作。
+ * @param {any} old v1 的 courses_{cat} 数据（数组或已是 v2 结构）
+ * @returns {{groups: Array<{id:string,name:string,links:Array}>}}
+ */
+function normalizeCourseGroups(old) {
+  // 已是 v2 结构则原样返回（幂等）
+  if (old && !Array.isArray(old) && Array.isArray(old.groups)) return old;
+
+  const list = Array.isArray(old) ? old : [];
+  const links = list.map(c => {
+    const name = c && (c.name || c.title) ? (c.name || c.title) : '未命名';
+    return {
+      id: (c && c.id) || uid(),
+      name: name,
+      title: name,
+      type: (c && c.type) || '其他',
+      url: (c && c.url) || '',
+      note: (c && c.note) || ''
+    };
+  });
+  return { groups: [{ id: uid(), name: '默认分组', links: links }] };
+}
+
+/**
+ * 执行 v1 → v2 数据迁移
+ * @returns {{migrated:boolean, from:number, to:number, log?:string[], error?:string}}
+ */
+function migrateV1toV2() {
+  const from = Number(Store.get('schemaVersion', 1)) || 1;
+  if (from >= SCHEMA_VERSION) return { migrated: false, from: from, to: from };
+
+  // ── Step 0：全量快照备份（唯一一次性大写入，只保留一份） ──
+  const snapshot = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.indexOf('ky_') === 0 && k !== 'ky_backup_v1') {
+      snapshot[k] = localStorage.getItem(k);
+    }
+  }
+  try {
+    localStorage.setItem('ky_backup_v1', JSON.stringify({ at: Date.now(), from: from, data: snapshot }));
+  } catch (e) {
+    console.warn('[migrate] 备份失败（可能配额不足），继续迁移', e);
+  }
+
+  const log = [];
+  try {
+    const tStr = todayStr();
+
+    // ── Step 1：mathPoints 补齐 SM-2 v2 字段（幂等） ──
+    const pts = Store.get('mathPoints', []);
+    let touched = 0;
+    if (Array.isArray(pts)) {
+      pts.forEach(p => {
+        if (p && p.stability === undefined) {
+          // 由既有 interval 反推 stability，使 R(interval) 恰为目标记忆率
+          const iv = Number(p.interval) || 0;
+          p.stability = iv > 0 ? iv / 0.16251892949777494 : 0;
+          p.lapses = p.lapses == null ? 0 : p.lapses;
+          p.lastQuality = p.lastQuality == null ? null : p.lastQuality;
+          p.lastReview = p.lastReview == null ? (p.nextReview || null) : p.lastReview;
+          touched++;
+        }
+      });
+      if (touched) { Store.set('mathPoints', pts); log.push('mathPoints +v2字段 ×' + touched); }
+    }
+
+    // ── Step 2：xbb66.current → engSentenceState（保留旧键不删） ──
+    if (!Store.get('engSentenceState')) {
+      const oldXbb = Store.get('xbb66', {}) || {};
+      Store.set('engSentenceState', {
+        startDate: oldXbb.startDate || tStr,
+        // v1 的 current 是 1-based 句号，v2 的 manualOffset 是 0-based 偏移
+        manualOffset: Math.max(0, (Number(oldXbb.current) || 1) - 1),
+        marks: oldXbb.marks || {},
+        migratedFrom: 'xbb66'
+      });
+      log.push('xbb66 → engSentenceState');
+    }
+
+    // ── Step 3：旧规划器数据归档（只搬不删原始键，UI 不再读） ──
+    if (!Store.get('plannerArchive')) {
+      const legacyKeys = ['phases', 'monthly', 'milestones', 'goalSplits', 'goalTarget', 'plannerHistory'];
+      const arc = {};
+      legacyKeys.forEach(k => {
+        const v = Store.get(k);
+        if (v != null) arc[k] = v;
+      });
+      if (Object.keys(arc).length) {
+        Store.set('plannerArchive', { at: Date.now(), data: arc });
+        log.push('旧规划数据已归档 ×' + Object.keys(arc).length);
+      }
+    }
+
+    // ── Step 4：courses_ → coursesV2_（v1 已做过则跳过） ──
+    ['math', 'eng', 'politics', 'gis', 'rs', 'gps'].forEach(cat => {
+      if (Store.get('coursesV2_' + cat) == null) {
+        const oldCourses = Store.get('courses_' + cat);
+        if (oldCourses) {
+          Store.set('coursesV2_' + cat, normalizeCourseGroups(oldCourses));
+          log.push('coursesV2_' + cat);
+        }
+      }
+    });
+
+    // ── Step 5：dailyGoals 容器初始化（不预填任何日期） ──
+    if (Store.get('dailyGoals') == null) Store.set('dailyGoals', {});
+
+    // ── Step 6：v1 的 todo[date].items[].source='ai' → 'planner' ──
+    const todoAll = Store.get('todo', {}) || {};
+    let srcFixed = 0;
+    Object.keys(todoAll).forEach(d => {
+      const rec = todoAll[d];
+      if (rec && Array.isArray(rec.items)) {
+        rec.items.forEach(it => {
+          if (it && it.source === 'ai') { it.source = 'planner'; srcFixed++; }
+        });
+      }
+    });
+    if (srcFixed) { Store.set('todo', todoAll); log.push("todo source 'ai'→'planner' ×" + srcFixed); }
+
+    // ⚠️ 不在此处生成 markjiState 的 516 条记录 —— 见 ensureMarkjiState() 懒生成
+    Store.set('schemaVersion', SCHEMA_VERSION);
+    console.info('[migrate] v1→v2 完成：', log);
+    return { migrated: true, from: from, to: SCHEMA_VERSION, log: log };
+
+  } catch (err) {
+    console.error('[migrate] 失败，已保留 ky_backup_v1，可在控制台调用 rollbackToV1() 还原', err);
+    return { migrated: false, from: from, to: from, error: String(err) };
+  }
+}
+
+/**
+ * 回滚到 v1 快照（控制台手动调用）
+ * @returns {void}
+ */
+function rollbackToV1() {
+  const bak = Store.get('backup_v1');
+  if (!bak || !bak.data) { toast('无可用备份'); return; }
+  Object.keys(bak.data).forEach(k => {
+    localStorage.setItem(k, bak.data[k]);
+  });
+  localStorage.removeItem('ky_schemaVersion');
+  toast('已回滚到 v1，即将刷新');
+  setTimeout(() => location.reload(), 600);
+}
+
 // ===== 状态 =====
 let currentModule = 'review';
 let currentDate = today();
 
 // ===== 导航 =====
 function switchModule(name) {
+  TimerBus.clearScope('view:');   // [v2/T02] 清掉上个视图的定时器，根治 dashClockInterval 泄漏
   currentModule = name;
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   const nav = document.querySelector(`.nav-item[data-module="${name}"]`);
@@ -864,7 +1358,8 @@ function escapeHtml(s) {
 const modules = {};
 
 // ===== 今日看板（合并：时钟+倒计时+待改进+番茄钟+每日目标+看板）=====
-let dashClockInterval = null;
+// [v2/T02] 原 `let dashClockInterval` 已由 TimerBus('view:dashClock') 接管：
+// switchModule 首行 clearScope('view:') 会自动回收，不再泄漏每秒定时器。
 
 modules['dashboard'] = (c) => {
   const examDate = Store.get('examDate', '2026-12-21');
@@ -938,15 +1433,34 @@ modules['dashboard'] = (c) => {
     </div>
   `;
 
-  // 实时时钟
+  // 实时时钟（[v2/T02] 走 TimerBus 的 view: 作用域，切模块自动回收）
   updateDashClock();
-  if (dashClockInterval) clearInterval(dashClockInterval);
-  dashClockInterval = setInterval(updateDashClock, 1000);
+  TimerBus.set('view:dashClock', updateDashClock, 1000);
 
   renderDashTodo(todoData.items);
   updateDashPomoDisplay();
   renderDashPomoHistory();
 };
+
+/**
+ * [v2/T04] 解析「待改进」面板的数据源：向前回溯最多 maxBack 天，
+ * 取第一个有内容的日期。勾选状态归属源日期，跨天不清空、不迁移。
+ * @param {string} baseDate 'YYYY-MM-DD'
+ * @param {number} [maxBack=7] 最大回溯天数
+ * @returns {{date:string|null, daysAgo:number, items:Array, stale:boolean}}
+ */
+function resolveImproveSource(baseDate, maxBack = 7) {
+  const all = Store.get('improve', {}) || {};
+  for (let i = 1; i <= maxBack; i++) {
+    const d = dateOffset(baseDate, -i);
+    const rec = all[d];
+    const items = ((rec && rec.items) || []).filter(x => x && x.text);
+    if (items.length) {
+      return { date: d, daysAgo: i, items: items, stale: i > 1 };
+    }
+  }
+  return { date: null, daysAgo: 0, items: [], stale: false };
+}
 
 function updateDashClock() {
   const now = new Date();
@@ -1672,1525 +2186,6 @@ function updateCountdown() {
   const days = daysUntil(examDate);
   const el = document.getElementById('countdownDays');
   if (el) el.textContent = days;
-}
-
-// ===== 复习规划师模块（接入WorkBuddy考试复习规划师专家工作流）=====
-modules['study-planner'] = (c) => {
-  const examDate = Store.get('examDate', '2026-12-21');
-  const days = daysUntil(examDate);
-  const target = Store.get('goalTarget', '');
-  const ready = AIEngine.isReady();
-  const cfg = AIEngine.getConfig();
-
-  c.innerHTML = `
-    <div class="card planner-expert-card">
-      <div class="card-title">🧠 WorkBuddy 专家中心 · 考试复习规划师</div>
-      <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;">
-        点「🚀 唤起」会直接拉起你本机已安装的 WorkBuddy 桌面应用，并尝试自动切换到「考试复习规划师」专家开聊（已自动复制专家名作保底）。
-      </p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-primary" onclick="openExpertCenter()">🚀 唤起并用专家对话</button>
-        <button class="btn btn-outline" onclick="copyExpertName()">📋 复制专家名</button>
-        <button class="btn btn-outline" onclick="openExpertWeb()">🌐 网页版</button>
-      </div>
-      <div style="font-size:11px;color:var(--text-light);margin-top:8px;">
-        手动保底：WorkBuddy 左侧点「专家」→ 搜索框粘贴「考试复习规划师」→ 点「立即召唤」。首次需在桌面端「Claw设置 → 协议注册」启用 <b>workbuddy://</b>。
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">📥 粘贴文字 · 智能识别任务</div>
-      <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;">
-        把你的备考计划/安排粘贴到下面（可含<b>每日、每月、阶段/周</b>任务），系统自动识别并分类：
-      </p>
-      <textarea class="textarea" id="plannerPasteInput" placeholder="例如：&#10;【每日】&#10;- 背50个考研单词&#10;- 高数导数应用练习1小时&#10;【每月】&#10;- 完成数学二真题一套&#10;【阶段】基础阶段&#10;- 高数一轮复习&#10;- 线代知识点梳理" style="min-height:140px;"></textarea>
-      <div style="display:flex;gap:8px;margin-top:10px;">
-        <button class="btn btn-primary" onclick="plannerParsePaste()">🔍 智能识别</button>
-        <button class="btn btn-outline" onclick="plannerClearPaste()">清空</button>
-      </div>
-      <div id="plannerParseResult" style="margin-top:12px;"></div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">🎯 我的目标</div>
-      <div id="plannerMyGoals"></div>
-    </div>
-
-    <div class="card planner-expert-card">
-      <div class="card-title">📋 考研学习计划 · 共享模板</div>
-      <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;">
-        这是一份 WorkBuddy 共享的「制定考研学习计划」提示词模板，点下方按钮即可在 WorkBuddy（桌面端/网页版）中直接打开并基于你的备考情况生成计划。
-      </p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-primary" onclick="openStudyPlanTemplate()">🚀 打开规划模板</button>
-        <button class="btn btn-outline" onclick="copyText('https://workbuddy.link/p/QSkX48VX06swlfW6zLakY6?ext2=copy_link')">🔗 复制链接</button>
-      </div>
-      <div style="font-size:11px;color:var(--text-light);margin-top:8px;">
-        若已安装 WorkBuddy 桌面端，点击会直接唤起应用并预填该规划模板；未安装则在浏览器打开网页版。
-      </div>
-    </div>
-
-    <div class="planner-collapse">
-      <div class="planner-collapse-head" onclick="togglePlannerCollapse()">
-        <span>🧠 复习规划师 · 规划对话区（点击展开）</span>
-        <span class="planner-collapse-icon" id="plannerCollapseIcon">▸</span>
-      </div>
-      <div class="planner-collapse-body" id="plannerCollapseBody" style="display:none;">
-
-        <div class="card">
-          <div class="card-title">🧠 复习规划师</div>
-          <p style="color:var(--text-secondary);margin-bottom:12px;font-size:13px;line-height:1.6;">
-            基于 WorkBuddy「考试复习规划师」专家工作流，覆盖<b>规划→执行→复盘→修复→收口</b>全流程。
-          </p>
-
-          <div class="ai-status-bar ${ready ? 'ready' : 'notready'}">
-            <span class="ai-status-dot"></span>
-            <span class="ai-status-text">
-              ${ready
-                ? `AI 已连接 · ${AI_PROVIDERS[cfg.provider]?.name || cfg.provider} / ${cfg.model}`
-                : 'AI 未配置 —— 配置后可在工作台内直接对话规划，无需跳转'}
-            </span>
-            <button class="btn btn-outline btn-sm" onclick="openAISettings(()=>switchModule('study-planner'))">
-              ${ready ? '⚙️ 设置' : '🔑 立即配置'}
-            </button>
-          </div>
-
-          <div class="planner-info-bar">
-            <span class="planner-info-chip">📅 ${examDate}（${days}天）</span>
-            ${target ? `<span class="planner-info-chip">🎯 ${target}</span>` : ''}
-          </div>
-          <div class="planner-tabs" id="plannerTabs">
-            <button class="planner-tab active" data-scene="plan">📋 初次规划</button>
-            <button class="planner-tab" data-scene="today">✅ 今日任务</button>
-            <button class="planner-tab" data-scene="review">🔄 每日复盘</button>
-            <button class="planner-tab" data-scene="fix">🔧 计划修复</button>
-            <button class="planner-tab" data-scene="final">🎯 考前收口</button>
-          </div>
-          <div id="plannerScene"></div>
-        </div>
-
-        <div class="card" id="plannerChatCard">
-          <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
-            <span>💬 与规划师对话</span>
-            <span style="display:flex;gap:6px;">
-              <button class="btn btn-outline btn-sm" onclick="plannerExtractTasks()">📤 提取任务到今日目标</button>
-              <button class="btn btn-outline btn-sm" onclick="plannerClearChat()">🗑 清空对话</button>
-            </span>
-          </div>
-          <div class="chat-box" id="plannerChatBox"></div>
-          <div class="chat-input-row">
-            <textarea class="textarea" id="plannerChatInput" placeholder="填好上方表单后点「🚀 开始规划」，或在这里直接提问、追问修改..." rows="2"></textarea>
-            <div class="chat-input-btns">
-              <button class="btn btn-primary" id="plannerSendBtn" onclick="plannerSend()">发送</button>
-              <button class="btn btn-outline" id="plannerStopBtn" onclick="plannerStop()" style="display:none;">停止</button>
-            </div>
-          </div>
-          <div style="font-size:11px;color:var(--text-light);margin-top:6px;">Enter 发送 · Shift+Enter 换行</div>
-        </div>
-
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">📋 规划历史</div>
-      <div id="plannerHistory"></div>
-    </div>
-  `;
-
-  document.querySelectorAll('.planner-tab').forEach(tab => {
-    tab.onclick = () => {
-      document.querySelectorAll('.planner-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      plannerCurrentScene = tab.dataset.scene;
-      renderPlannerScene(tab.dataset.scene);
-    };
-  });
-
-  const input = document.getElementById('plannerChatInput');
-  if (input) {
-    input.onkeydown = (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); plannerSend(); }
-    };
-  }
-
-  plannerCurrentScene = 'plan';
-  renderPlannerScene('plan');
-  renderPlannerChat();
-  renderPlannerHistory();
-  renderPlannerMyGoals();
-};
-
-// ===== 规划师对话状态 =====
-let plannerCurrentScene = 'plan';
-let plannerAbortCtrl = null;
-
-const PLANNER_SYSTEM_PROMPT = `你是「考试复习规划师」，专门帮助考研学生把模糊的复习意图，变成可执行、可验证、可修复的具体计划。
-
-【你的核心原则】
-1. 计划必须落到"今天几点做什么、做多少、怎么算完成"，不能停留在"多练习""加强基础"这类空话。
-2. 任务必须带明确的量化交付物（如"高数第3章导数应用课后题 1-20 题，订正错题"），且单个任务不超过 90 分钟。
-3. 必须尊重用户给出的真实可用时间，不要排出一天 14 小时的理想计划。留 15%~20% 缓冲给突发情况。
-4. 先诊断再开方：如果关键信息缺失（可用时间、当前进度、薄弱点），先用一两个问题问清楚，不要凭空假设。
-5. 计划要有优先级：分数性价比高的、拖着不做会连锁崩盘的，排在前面。
-
-【输出格式要求】
-- 用简洁的 Markdown，避免冗长客套。
-- 给出"每日任务清单"时，每个任务单独一行，以 - 开头，格式为：\`- [科目] 具体任务 · 时长\`，方便用户一键导入待办。
-- 每次给出计划后，用一句话说明"如果今天只能完成一件事，那就是___"。
-- 最后附一个「验证标准」：怎么判断这一天/这一周的计划真的达成了。
-
-【语气】
-像一个见过很多考研学生、知道哪里会崩的靠谱学长。直接、务实、不灌鸡汤。`;
-
-function plannerChatKey() {
-  return 'plannerChat';
-}
-
-function getPlannerChat() {
-  return Store.get(plannerChatKey(), []);
-}
-
-function setPlannerChat(msgs) {
-  Store.set(plannerChatKey(), msgs);
-}
-
-function renderPlannerChat() {
-  const box = document.getElementById('plannerChatBox');
-  if (!box) return;
-  const msgs = getPlannerChat();
-  if (!msgs.length) {
-    box.innerHTML = `
-      <div class="chat-empty">
-        <div style="font-size:32px;margin-bottom:8px;">🧠</div>
-        <div style="font-size:13px;font-weight:600;margin-bottom:4px;">还没有开始对话</div>
-        <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">
-          在上方选择场景 → 填写信息 → 点「🚀 开始规划」<br>
-          规划师会实时生成方案，你可以继续追问、要求调整
-        </div>
-      </div>`;
-    return;
-  }
-  box.innerHTML = msgs.map((m, i) => `
-    <div class="chat-msg ${m.role}">
-      <div class="chat-avatar">${m.role === 'user' ? '🙋' : '🧠'}</div>
-      <div class="chat-bubble">
-        <div class="chat-content">${renderMarkdown(m.content)}</div>
-        ${m.role === 'assistant' ? `
-          <div class="chat-msg-actions">
-            <button onclick="plannerCopyMsg(${i})">📋 复制</button>
-            <button onclick="plannerExtractFrom(${i})">📤 提取任务</button>
-            <button onclick="plannerSaveMsg(${i})">💾 存为方案</button>
-          </div>` : ''}
-      </div>
-    </div>
-  `).join('');
-  box.scrollTop = box.scrollHeight;
-}
-
-// 轻量 Markdown 渲染（标题/加粗/列表/代码/表格分隔线）
-function renderMarkdown(text) {
-  let h = escapeHtml(text);
-  h = h.replace(/```([\s\S]*?)```/g, (m, code) => `<pre class="chat-pre">${code}</pre>`);
-  h = h.replace(/`([^`\n]+)`/g, '<code class="chat-code">$1</code>');
-  h = h.replace(/^###\s+(.+)$/gm, '<div class="md-h3">$1</div>');
-  h = h.replace(/^##\s+(.+)$/gm, '<div class="md-h2">$1</div>');
-  h = h.replace(/^#\s+(.+)$/gm, '<div class="md-h1">$1</div>');
-  h = h.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
-  h = h.replace(/^\s*[-*]\s+(.+)$/gm, '<div class="md-li">• $1</div>');
-  h = h.replace(/^\s*(\d+)\.\s+(.+)$/gm, '<div class="md-li">$1. $2</div>');
-  h = h.replace(/^---+$/gm, '<hr class="md-hr">');
-  h = h.replace(/\n/g, '<br>');
-  h = h.replace(/(<\/div>)<br>/g, '$1');
-  h = h.replace(/(<hr class="md-hr">)<br>/g, '$1');
-  return h;
-}
-
-// 从当前场景表单生成首条消息并发送
-async function plannerStart() {
-  const config = PLANNER_SCENES[plannerCurrentScene];
-  if (!config) return;
-  const values = {};
-  config.fields.forEach(f => {
-    const el = document.getElementById(f.id);
-    if (el) values[f.id] = el.value.trim();
-  });
-  const prompt = config.build(values);
-
-  if (!AIEngine.isReady()) {
-    openAISettings(() => { switchModule('study-planner'); });
-    toast('请先配置 AI，配置后即可实时对话');
-    return;
-  }
-
-  // 新场景开始时清空历史，避免上下文混乱
-  setPlannerChat([]);
-  await plannerSendMessage(prompt);
-}
-
-function plannerSend() {
-  const input = document.getElementById('plannerChatInput');
-  if (!input) return;
-  const text = input.value.trim();
-  if (!text) { toast('请输入内容'); return; }
-  if (!AIEngine.isReady()) {
-    openAISettings(() => switchModule('study-planner'));
-    toast('请先配置 AI');
-    return;
-  }
-  input.value = '';
-  plannerSendMessage(text);
-}
-
-async function plannerSendMessage(userText) {
-  const msgs = getPlannerChat();
-  msgs.push({ role: 'user', content: userText });
-  setPlannerChat(msgs);
-  renderPlannerChat();
-
-  // 插入流式占位气泡
-  const box = document.getElementById('plannerChatBox');
-  const holder = document.createElement('div');
-  holder.className = 'chat-msg assistant';
-  holder.innerHTML = `
-    <div class="chat-avatar">🧠</div>
-    <div class="chat-bubble">
-      <div class="chat-content" id="plannerStreaming"><span class="chat-typing">规划师思考中<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span></div>
-    </div>`;
-  box.appendChild(holder);
-  box.scrollTop = box.scrollHeight;
-
-  const sendBtn = document.getElementById('plannerSendBtn');
-  const stopBtn = document.getElementById('plannerStopBtn');
-  if (sendBtn) sendBtn.disabled = true;
-  if (stopBtn) stopBtn.style.display = 'inline-block';
-
-  plannerAbortCtrl = new AbortController();
-  const streamEl = document.getElementById('plannerStreaming');
-  let firstChunk = true;
-
-  try {
-    const apiMsgs = [
-      { role: 'system', content: PLANNER_SYSTEM_PROMPT },
-      ...msgs.slice(-12).map(m => ({ role: m.role, content: m.content })),
-    ];
-
-    const full = await AIEngine.chat(apiMsgs, (piece, all) => {
-      if (firstChunk) { streamEl.innerHTML = ''; firstChunk = false; }
-      streamEl.innerHTML = renderMarkdown(all) + '<span class="chat-cursor"></span>';
-      box.scrollTop = box.scrollHeight;
-    }, plannerAbortCtrl.signal);
-
-    const msgs2 = getPlannerChat();
-    msgs2.push({ role: 'assistant', content: full || '(空回复)' });
-    setPlannerChat(msgs2);
-    renderPlannerChat();
-  } catch (e) {
-    if (e.name === 'AbortError') {
-      const partial = streamEl?.textContent || '';
-      if (partial && !firstChunk) {
-        const msgs3 = getPlannerChat();
-        msgs3.push({ role: 'assistant', content: partial + '\n\n_（已手动停止）_' });
-        setPlannerChat(msgs3);
-      }
-      renderPlannerChat();
-      toast('已停止生成');
-    } else {
-      holder.remove();
-      const errBox = document.createElement('div');
-      errBox.className = 'chat-msg assistant';
-      errBox.innerHTML = `
-        <div class="chat-avatar">⚠️</div>
-        <div class="chat-bubble" style="background:#fef2f2;border-color:#fecaca;">
-          <div class="chat-content" style="color:#dc2626;font-size:13px;">
-            <b>调用失败</b><br>${escapeHtml(e.message)}
-            <div style="margin-top:8px;">
-              <button class="btn btn-outline btn-sm" onclick="openAISettings(()=>switchModule('study-planner'))">⚙️ 检查设置</button>
-            </div>
-          </div>
-        </div>`;
-      box.appendChild(errBox);
-      box.scrollTop = box.scrollHeight;
-    }
-  } finally {
-    plannerAbortCtrl = null;
-    if (sendBtn) sendBtn.disabled = false;
-    if (stopBtn) stopBtn.style.display = 'none';
-  }
-}
-
-function plannerStop() {
-  if (plannerAbortCtrl) plannerAbortCtrl.abort();
-}
-
-function plannerClearChat() {
-  if (!confirm('确定清空当前对话？规划历史不受影响。')) return;
-  setPlannerChat([]);
-  renderPlannerChat();
-  toast('对话已清空');
-}
-
-function plannerCopyMsg(i) {
-  const msgs = getPlannerChat();
-  if (msgs[i]) copyText(msgs[i].content);
-}
-
-function plannerSaveMsg(i) {
-  const msgs = getPlannerChat();
-  if (!msgs[i]) return;
-  const history = Store.get('plannerHistory', []);
-  history.unshift({
-    id: uid(),
-    scene: plannerCurrentScene,
-    title: (PLANNER_SCENES[plannerCurrentScene]?.title || '规划') + '（AI方案）',
-    prompt: msgs[i].content.slice(0, 400),
-    full: msgs[i].content,
-    time: Date.now(),
-  });
-  if (history.length > 30) history.length = 30;
-  Store.set('plannerHistory', history);
-  toast('已保存到规划历史');
-  renderPlannerHistory();
-}
-
-// 从 AI 回复中自动抽取任务行
-function extractTaskLines(text) {
-  const lines = text.split('\n');
-  const tasks = [];
-  for (let raw of lines) {
-    let l = raw.trim();
-    if (!l) continue;
-    // 匹配 "- xxx" / "* xxx" / "1. xxx" / "- [ ] xxx"
-    const m = l.match(/^(?:[-*]\s*(?:\[[ x]\]\s*)?|\d+[.、)]\s*)(.+)$/);
-    if (!m) continue;
-    let t = m[1].trim();
-    t = t.replace(/\*\*/g, '').replace(/`/g, '').trim();
-    if (t.length < 4 || t.length > 80) continue;
-    // 过滤掉像标题、说明性的行
-    if (/^(验证标准|如果今天|说明|注意|备注|总结|原则)/.test(t)) continue;
-    if (t.endsWith('：') || t.endsWith(':')) continue;
-    tasks.push(t);
-  }
-  return tasks;
-}
-
-function plannerExtractFrom(i) {
-  const msgs = getPlannerChat();
-  if (!msgs[i]) return;
-  showExtractModal(extractTaskLines(msgs[i].content));
-}
-
-function plannerExtractTasks() {
-  const msgs = getPlannerChat();
-  const lastAI = [...msgs].reverse().find(m => m.role === 'assistant');
-  if (!lastAI) { toast('还没有 AI 回复'); return; }
-  showExtractModal(extractTaskLines(lastAI.content));
-}
-
-function showExtractModal(tasks) {
-  if (!tasks.length) {
-    modal('提取任务', `
-      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:10px;">
-        没有自动识别到任务行。你可以手动粘贴要导入的任务（每行一个）：
-      </p>
-      <textarea class="textarea" id="syncTodoText" placeholder="高数极限计算练习 30min&#10;背50个考研单词" style="min-height:160px;"></textarea>
-    `, (m) => {
-      const text = m.querySelector('#syncTodoText').value.trim();
-      const list = text.split('\n').map(t => t.trim()).filter(Boolean);
-      if (!list.length) { toast('请输入任务'); return false; }
-      syncPlannerToTodo(list);
-      return true;
-    });
-    return;
-  }
-
-  modal('📤 提取任务到今日目标', `
-    <p style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;">
-      自动识别到 <b>${tasks.length}</b> 条任务，取消勾选不需要的，确定后加入今日目标：
-    </p>
-    <div style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px;">
-      ${tasks.map((t, i) => `
-        <label style="display:flex;align-items:flex-start;gap:8px;padding:6px 4px;font-size:13px;line-height:1.5;cursor:pointer;">
-          <input type="checkbox" class="extract-cb" data-idx="${i}" checked style="margin-top:3px;flex-shrink:0;">
-          <span>${escapeHtml(t)}</span>
-        </label>
-      `).join('')}
-    </div>
-  `, (m) => {
-    const picked = [...m.querySelectorAll('.extract-cb')]
-      .filter(cb => cb.checked)
-      .map(cb => tasks[+cb.dataset.idx]);
-    if (!picked.length) { toast('请至少勾选一条'); return false; }
-    syncPlannerToTodo(picked);
-    return true;
-  });
-}
-
-// ===== WorkBuddy 专家中心入口 =====
-// 优先尝试用 workbuddy:// 自定义协议直接唤起本地桌面应用并打开专家；
-// 若协议未注册/未启用，则回退打开网页版。
-// WorkBuddy 官方协议仅有 workbuddy://command?text=xxx（text 需 URL 编码），
-// 没有"直接打开指定专家"的文档化深链。把专家名写进任务指令，让应用收到后
-// 有最大概率自行切换到该专家并开聊；同时自动复制专家名作为手动保底。
-function openExpertCenter() {
-  const task = '请在专家中心切换到「考试复习规划师」专家，并基于我的考研备考情况（数学二 + 英语 + 政治 + 专业课 GIS/RS/GPS），帮我制定一份分阶段复习规划。';
-  const deepLink = `workbuddy://command?text=${encodeURIComponent(task)}`;
-  copyText('考试复习规划师'); // 保底：复制专家名，方便手动搜索
-  toast('正在唤起 WorkBuddy 桌面应用…（已自动复制专家名）');
-  try {
-    const a = document.createElement('a');
-    a.href = deepLink;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    // 协议唤起后通常已切走；2.5s 后提示手动保底路径
-    setTimeout(() => {
-      toast('若未自动进入专家：在 WorkBuddy 左侧点「专家」→ 搜索框粘贴「考试复习规划师」→ 点「立即召唤」');
-    }, 2500);
-  } catch (e) {
-    window.open('https://www.workbuddy.cn/', '_blank');
-  }
-}
-
-function openExpertWeb() {
-  window.open('https://www.workbuddy.cn/', '_blank');
-  toast('已打开 WorkBuddy 网页版，请在左侧「专家」搜索「考试复习规划师」');
-}
-
-function copyExpertName() {
-  copyText('考试复习规划师');
-  toast('已复制专家名：考试复习规划师');
-}
-
-// 打开 WorkBuddy 共享的「制定考研学习计划」提示词模板
-// workbuddy.link/p/... 是共享 prompt，点击后由 workbuddy.link 负责唤起桌面应用或打开网页版
-function openStudyPlanTemplate() {
-  const url = 'https://workbuddy.link/p/QSkX48VX06swlfW6zLakY6?ext2=copy_link';
-  toast('正在打开「制定考研学习计划」共享模板…');
-  window.open(url, '_blank');
-}
-
-// 折叠/展开「复习规划师」规划对话区
-function togglePlannerCollapse() {
-  const body = document.getElementById('plannerCollapseBody');
-  if (!body) return;
-  const open = body.style.display !== 'none';
-  body.style.display = open ? 'none' : 'block';
-  const icon = document.getElementById('plannerCollapseIcon');
-  if (icon) icon.textContent = open ? '▸' : '▾';
-}
-
-// ===== 粘贴文字智能识别任务 =====
-function plannerClearPaste() {
-  const el = document.getElementById('plannerPasteInput');
-  if (el) el.value = '';
-  const r = document.getElementById('plannerParseResult');
-  if (r) r.innerHTML = '';
-}
-
-function plannerParsePaste() {
-  const el = document.getElementById('plannerPasteInput');
-  if (!el) return;
-  const text = el.value.trim();
-  if (!text) { toast('请先粘贴文字'); return; }
-  const buckets = parsePlanText(text);
-  renderPlannerParseResult(buckets);
-}
-
-// 本地规则：按"小节标题"或行内关键词归类到 daily / monthly / phase
-function parsePlanText(text) {
-  const buckets = { daily: [], monthly: [], phase: [] };
-  let current = null; // 当前小节类别
-  const lines = text.split(/\r?\n/);
-  for (let raw of lines) {
-    const line = raw.trim();
-    if (!line) continue;
-
-    // 小节标题识别（被 【】 或 [] 包裹，或整行就是关键词）
-    const header = line.match(/^[【\[]?\s*(每日|每天|日计划|daily|day)\s*[\]】]?$/i)
-      || line.match(/^[【\[]?\s*(每月|月计划|monthly|month)\s*[\]】]?$/i)
-      || line.match(/^[【\[]?\s*(阶段|周计划|每周|weekly|phase|里程碑)\s*[\]】]?$/i);
-    if (header) {
-      const k = header[1];
-      if (/每日|每天|日计划|daily|day/i.test(k)) current = 'daily';
-      else if (/每月|月计划|monthly|month/i.test(k)) current = 'monthly';
-      else current = 'phase';
-      continue;
-    }
-
-    // 行内关键词（即使没有小节标题也能判断）
-    const inlineDaily = /(每日|每天)/.test(line);
-    const inlineMonthly = /(每月|月计划)/.test(line);
-    const inlinePhase = /(阶段|第[一二三四五六七八九十\d]+周|本周|下周|里程碑|phase)/.test(line);
-
-    // 任务行：列表项或纯短句
-    const taskMatch = line.match(/^(?:[-*]\s*(?:\[[ x]\]\s*)?|\d+[.、)]\s*)(.+)$/);
-    let taskText = null;
-    if (taskMatch) {
-      taskText = taskMatch[1].replace(/\*\*/g, '').replace(/`/g, '').trim();
-    } else if (line.length >= 4 && line.length <= 60 && !/[：:]$/.test(line)
-      && !/^(说明|注意|验证|总结|原则|如果|建议)/.test(line)) {
-      taskText = line.replace(/\*\*/g, '').trim();
-    }
-    if (!taskText || taskText.length < 2) continue;
-
-    let cat = current;
-    if (!cat) {
-      if (inlineDaily) cat = 'daily';
-      else if (inlineMonthly) cat = 'monthly';
-      else if (inlinePhase) cat = 'phase';
-      else cat = 'daily'; // 默认归每日
-    }
-    if (!buckets[cat].includes(taskText)) buckets[cat].push(taskText);
-  }
-  return buckets;
-}
-
-function renderPlannerParseResult(buckets) {
-  const box = document.getElementById('plannerParseResult');
-  if (!box) return;
-  const cats = [
-    { key: 'daily', label: '📅 每日任务', target: '今日目标' },
-    { key: 'monthly', label: '🗓 每月任务', target: '本月目标' },
-    { key: 'phase', label: '🚩 阶段/周任务', target: '阶段目标' },
-  ];
-  const total = buckets.daily.length + buckets.monthly.length + buckets.phase.length;
-  if (!total) {
-    box.innerHTML = '<div class="empty-state" style="padding:16px;"><div class="empty-state-text">未能识别到任务。请确认文字含「每日 / 每月 / 阶段」等关键词，或每行一条任务（用 - 或 1. 开头）。</div></div>';
-    return;
-  }
-  box.innerHTML = cats.map(cat => {
-    const items = buckets[cat.key];
-    if (!items.length) return '';
-    return `
-      <div class="parse-group">
-        <div class="parse-group-title">${cat.label} <span class="parse-count">${items.length}</span></div>
-        <div class="parse-items">
-          ${items.map((t) => `
-            <label class="parse-item">
-              <input type="checkbox" class="parse-cb" data-cat="${cat.key}" checked>
-              <span>${escapeHtml(t)}</span>
-            </label>`).join('')}
-        </div>
-        <button class="btn btn-sm btn-primary" onclick="plannerAddParsed('${cat.key}')">➕ 加入${cat.target}</button>
-      </div>`;
-  }).join('');
-  box.scrollIntoView({ behavior: 'smooth' });
-}
-
-function plannerAddParsed(cat) {
-  const box = document.getElementById('plannerParseResult');
-  if (!box) return;
-  const cbs = [...box.querySelectorAll(`.parse-cb[data-cat="${cat}"]`)].filter(cb => cb.checked);
-  if (!cbs.length) { toast('请至少勾选一条'); return; }
-  const texts = cbs.map(cb => cb.parentElement.querySelector('span').textContent.trim());
-  if (cat === 'daily') {
-    syncPlannerToTodo(texts);
-  } else if (cat === 'monthly') {
-    addMonthlyGoals(texts);
-  } else {
-    addPhaseGoal(texts);
-  }
-  renderPlannerMyGoals();
-  toast('已加入目标');
-}
-
-function monthKey() {
-  const d = new Date();
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-}
-
-function addMonthlyGoals(texts) {
-  const data = Store.getByDate('monthly', monthKey()) || { items: [] };
-  texts.forEach(t => data.items.push({ id: uid(), text: t, done: false, source: 'paste' }));
-  Store.setByDate('monthly', monthKey(), data);
-}
-
-function addPhaseGoal(texts) {
-  const name = prompt('给这个阶段/周起个名字：', '新阶段目标');
-  if (name === null) return; // 取消
-  const phases = Store.get('phases', []);
-  phases.push({
-    id: uid(),
-    name: (name || '新阶段目标').trim(),
-    items: texts.map(t => ({ id: uid(), text: t, done: false })),
-  });
-  Store.set('phases', phases);
-}
-
-// ===== 我的目标展示 =====
-function renderPlannerMyGoals() {
-  const box = document.getElementById('plannerMyGoals');
-  if (!box) return;
-  const todoData = Store.getByDate('todo', currentDate) || { items: [] };
-  const monthlyData = Store.getByDate('monthly', monthKey()) || { items: [] };
-  const phases = Store.get('phases', []);
-
-  let html = renderGoalGroup(`📅 今日目标`, todoData.items, 'toggleTodo', 'delTodo');
-  html += renderGoalGroup(`🗓 本月目标 (${monthKey()})`, monthlyData.items, 'toggleMonthly', 'delMonthly');
-  if (phases.length) {
-    html += phases.map(p => renderPhaseGroup(p)).join('');
-  }
-  box.innerHTML = html;
-}
-
-function renderGoalGroup(title, items, toggleFn, delFn) {
-  return `
-    <div class="goal-group">
-      <div class="goal-group-title">${title} ${items.length ? `<span class="parse-count">${items.length}</span>` : ''}</div>
-      ${items.length ? `<div class="goal-items">` + items.map(it => `
-        <div class="goal-item ${it.done ? 'done' : ''}">
-          <div class="todo-checkbox ${it.done ? 'checked' : ''}" onclick="${toggleFn}('${it.id}')"></div>
-          <span class="goal-text">${escapeHtml(it.text)}</span>
-          <button class="todo-delete" onclick="${delFn}('${it.id}')">✕</button>
-        </div>`).join('') + `</div>` : '<div class="goal-empty">暂无</div>'}
-    </div>`;
-}
-
-function renderPhaseGroup(p) {
-  const done = p.items.filter(x => x.done).length;
-  return `
-    <div class="goal-group phase-group">
-      <div class="goal-group-title">
-        🚩 ${escapeHtml(p.name)} <span class="parse-count">${done}/${p.items.length}</span>
-        <button class="todo-delete phase-del" onclick="delPhase('${p.id}')">删阶段</button>
-      </div>
-      <div class="goal-items">
-        ${p.items.map(it => `
-          <div class="goal-item ${it.done ? 'done' : ''}">
-            <div class="todo-checkbox ${it.done ? 'checked' : ''}" onclick="togglePhase('${p.id}','${it.id}')"></div>
-            <span class="goal-text">${escapeHtml(it.text)}</span>
-            <button class="todo-delete" onclick="delPhaseItem('${p.id}','${it.id}')">✕</button>
-          </div>`).join('')}
-      </div>
-    </div>`;
-}
-
-function toggleMonthly(id) {
-  const data = Store.getByDate('monthly', monthKey()) || { items: [] };
-  const it = data.items.find(x => x.id === id);
-  if (it) { it.done = !it.done; Store.setByDate('monthly', monthKey(), data); renderPlannerMyGoals(); }
-}
-
-function delMonthly(id) {
-  const data = Store.getByDate('monthly', monthKey()) || { items: [] };
-  data.items = data.items.filter(x => x.id !== id);
-  Store.setByDate('monthly', monthKey(), data);
-  renderPlannerMyGoals();
-}
-
-function togglePhase(pid, id) {
-  const ps = Store.get('phases', []);
-  const p = ps.find(x => x.id === pid);
-  if (p) {
-    const it = p.items.find(x => x.id === id);
-    if (it) { it.done = !it.done; Store.set('phases', ps); renderPlannerMyGoals(); }
-  }
-}
-
-function delPhaseItem(pid, id) {
-  const ps = Store.get('phases', []);
-  const p = ps.find(x => x.id === pid);
-  if (p) { p.items = p.items.filter(x => x.id !== id); Store.set('phases', ps); renderPlannerMyGoals(); }
-}
-
-function delPhase(pid) {
-  const ps = Store.get('phases', []);
-  Store.set('phases', ps.filter(x => x.id !== pid));
-  renderPlannerMyGoals();
-}
-
-const PLANNER_SCENES = {
-  plan: {
-    title: '初次规划',
-    icon: '📋',
-    desc: '还没有可执行计划时，生成完整备考方案 + 未来七天计划',
-    fields: [
-      { id: 'pl_hours', label: '每日可用学习时间（小时）', type: 'number', placeholder: '如: 6', hint: '含听课+做题+背诵的总时间' },
-      { id: 'pl_math', label: '数学基础', type: 'textarea', placeholder: '如: 高数过了一轮，线代刚开始，导数应用薄弱' },
-      { id: 'pl_eng', label: '英语基础', type: 'textarea', placeholder: '如: 单词背了一半，阅读正确率60%' },
-      { id: 'pl_pol', label: '政治基础', type: 'textarea', placeholder: '如: 尚未开始' },
-      { id: 'pl_major', label: '专业课基础', type: 'textarea', placeholder: '如: RS遥感过了一轮，GPS/GIS未开始' },
-    ],
-    build: (v) => {
-      const examDate = Store.get('examDate', '2026-12-21');
-      const days = daysUntil(examDate);
-      const target = Store.get('goalTarget', '目标院校');
-      const hours = v.pl_hours || '未填写';
-      const mathBase = v.pl_math || '未填写';
-      const engBase = v.pl_eng || '未填写';
-      const polBase = v.pl_pol || '未填写';
-      const majorBase = v.pl_major || '未填写';
-
-      return `你是考试复习规划师。根据考试范围、剩余时间、现实约束和掌握证据，帮用户制定可执行的备考计划。
-
-## 用户信息
-- 目标：${target}
-- 考研日期：${examDate}（距今${days}天）
-- 每日可用学习时间：${hours}小时
-- 当前基础：
-  - 数学（二）：${mathBase}
-  - 英语：${engBase}
-  - 政治：${polBase}
-  - 专业课（RS遥感/GPS定位/GIS系统）：${majorBase}
-
-## 要求
-请按以下格式输出备考方案：
-
-### 1. 结论与风险
-- 推荐模式（学期/冲刺/救急）
-- 当前主攻科目及排序依据
-- 每日总时间 / 净容量（总时间×0.7）
-- 主要风险
-- 待确认项
-
-### 2. 阶段安排（表格）
-| 阶段 | 目标 | 任务范围 | 完成标准 | 时间 |
-
-### 3. 未来七天（表格）
-| 日期 | A类任务（必做） | B类任务（增益） | 复习/验证 | 预计总时长 |
-
-### 4. 今天先做
-- 任务ID、动作与对象、预计时长、完成标准
-- 完成后回复格式：任务ID｜完成度｜掌握度｜实际耗时｜卡点
-
-## 规则
-- 先根据真实可用时间计算净容量（总时间×0.7），再排任务，任务总时长不超过净容量
-- 单项任务控制在20—50分钟
-- A类任务直接影响近期考试或高权重弱项；B类有明确增益；C类时间允许再做
-- 每项任务写明动作、知识点、预计时长和完成标准
-- "看完""抄完""听懂"不直接视为掌握，需通过做题或复述验证
-- 考研科目：数学二（高数+线代）、英语、政治、专业课（遥感RS/GPS定位/GIS系统）`;
-    },
-  },
-
-  today: {
-    title: '今日任务',
-    icon: '✅',
-    desc: '已有复习方向，安排今天的 A/B/C 类任务',
-    fields: [
-      { id: 'td_hours', label: '今天可用学习时间（小时）', type: 'number', placeholder: '如: 5', hint: '真实可用时间，含碎片时间' },
-      { id: 'td_focus', label: '今天想重点突破的科目', type: 'text', placeholder: '如: 数学高数导数应用 + 英语阅读' },
-      { id: 'td_progress', label: '当前进度/上次计划', type: 'textarea', placeholder: '如: 昨天做了2018年数学真题选择部分，错3道' },
-    ],
-    build: (v) => {
-      const examDate = Store.get('examDate', '2026-12-21');
-      const days = daysUntil(examDate);
-      const hours = v.td_hours || '未填写';
-      const focus = v.td_focus || '未填写';
-      const progress = v.td_progress || '未填写';
-
-      return `你是考试复习规划师。用户已有复习方向，需要安排今天的任务。
-
-## 用户信息
-- 考研日期：${examDate}（距今${days}天）
-- 今天可用学习时间：${hours}小时
-- 今天想重点突破：${focus}
-- 当前进度/上次计划：${progress}
-
-## 要求
-请按以下格式输出今日任务：
-
-### 1. 容量计算
-- 总可用时间：${hours}小时
-- 预留缓冲（20%）
-- 净容量
-
-### 2. A类任务（必须优先）
-每项任务包含：任务ID、动作与对象、预计时长、完成标准、所需资料
-
-### 3. B类任务（完成后有明确增益）
-（没有则省略）
-
-### 4. C类任务（时间允许再做）
-（没有则省略）
-
-### 5. 今日收口
-- 主动回忆或自测建议
-- 打卡格式：任务ID｜完成度｜掌握度｜实际耗时｜卡点
-
-## 规则
-- 任务时长之和不超过净容量
-- 单项任务20—50分钟，疲劳时可缩短
-- A类任务直接影响近期考试或高权重弱项
-- 每项任务写明动作、知识点、预计时长和完成标准
-- "看完""抄完"不直接视为掌握`;
-    },
-  },
-
-  review: {
-    title: '每日复盘',
-    icon: '🔄',
-    desc: '提交今日完成情况，复盘并调整明日计划',
-    fields: [
-      { id: 'rv_done', label: '今日完成了哪些任务', type: 'textarea', placeholder: '如: 做了2018年选择题+背了50个单词+听了1小时高数网课' },
-      { id: 'rv_partial', label: '部分完成/未完成的任务', type: 'textarea', placeholder: '如: 解答题只做了前2道，时间不够' },
-      { id: 'rv_mastery', label: '掌握度自评', type: 'textarea', placeholder: '如: 极限计算熟练，中值定理模糊，线代概念不会' },
-      { id: 'rv_time', label: '实际耗时与差异', type: 'textarea', placeholder: '如: 计划4小时，实际用了5小时，选择题超时' },
-      { id: 'rv_stuck', label: '主要卡点/错题', type: 'textarea', placeholder: '如: 2018年第3题不会，导数应用完全没思路' },
-    ],
-    build: (v) => {
-      const examDate = Store.get('examDate', '2026-12-21');
-      const days = daysUntil(examDate);
-      const done = v.rv_done || '未填写';
-      const partial = v.rv_partial || '无';
-      const mastery = v.rv_mastery || '未填写';
-      const timeDiff = v.rv_time || '未填写';
-      const stuck = v.rv_stuck || '无';
-
-      return `你是考试复习规划师。用户提交了今日完成情况，请复盘并调整明日计划。
-
-## 用户信息
-- 考研日期：${examDate}（距今${days}天）
-
-## 今日完成情况
-- 已完成：${done}
-- 部分完成/未完成：${partial}
-- 掌握度自评：${mastery}
-- 实际耗时与差异：${timeDiff}
-- 主要卡点/错题：${stuck}
-
-## 要求
-请按以下格式输出复盘：
-
-### 1. 结论
-- 今日状态：按计划 / 部分偏离 / 需要重排
-- 触发原因
-- 明日最优先
-
-### 2. 执行与掌握
-- 已完成
-- 部分完成
-- 已验证掌握（通过做题/复述/真题验证的）
-- 仍未验证或新增弱项
-- 预计与实际耗时差异
-
-### 3. 计划变化
-- 保留
-- 后移
-- 删除
-- 替换
-- 新增
-- 变化原因
-
-### 4. 下一步
-- 明日A类任务
-- 完成后回复格式：任务ID｜完成度｜掌握度｜实际耗时｜卡点
-
-## 规则
-- "看完""抄完"不直接视为掌握，需通过做题或复述验证
-- A类任务连续两次未完成时启动重排
-- 重排不是把未完成任务原样挪到明天，先判断失败原因再决定保留/拆分/降级/替换/后移/删除
-- 不用压缩睡眠填补缺口`;
-    },
-  },
-
-  fix: {
-    title: '计划修复',
-    icon: '🔧',
-    desc: '计划偏离、超时、过载或条件变化时，修复计划',
-    fields: [
-      { id: 'fx_change', label: '发生了什么变化', type: 'textarea', placeholder: '如: 生病3天没学习 / 学校临时加课 / 政治还没开始' },
-      { id: 'fx_remaining', label: '剩余可用容量', type: 'textarea', placeholder: '如: 每天只剩3小时，周末多一些' },
-      { id: 'fx_constraint', label: '仍需保留的硬约束', type: 'textarea', placeholder: '如: 每天必须背单词+做数学题，不能砍' },
-    ],
-    build: (v) => {
-      const examDate = Store.get('examDate', '2026-12-21');
-      const days = daysUntil(examDate);
-      const change = v.fx_change || '未填写';
-      const remaining = v.fx_remaining || '未填写';
-      const constraint = v.fx_constraint || '无';
-
-      return `你是考试复习规划师。用户的计划出现了偏离，需要修复。
-
-## 用户信息
-- 考研日期：${examDate}（距今${days}天）
-
-## 变化情况
-- 发生了什么变化：${change}
-- 剩余可用容量：${remaining}
-- 仍需保留的硬约束：${constraint}
-
-## 要求
-请按以下格式输出计划修复：
-
-### 1. 容量缺口
-- 距最近考试
-- 剩余总容量
-- 现有任务估算
-- 缺口
-
-### 2. 取舍
-- 必须保留
-- 可以后移
-- 建议删除
-- 无法覆盖
-
-### 3. 重排后的前三项任务
-1. 任务ID｜动作｜时长｜完成标准
-2. 任务ID｜动作｜时长｜完成标准
-3. 任务ID｜动作｜时长｜完成标准
-
-### 4. 变化原因
-- 用户反馈或现实约束
-- 使用的裁决规则
-
-## 规则
-- 容量不足时必须删除、后移或降级，不用压缩睡眠填补缺口
-- 重排不是把未完成任务原样挪到明天，先判断失败原因再决定保留/拆分/降级/替换/后移/删除
-- 多科排序使用同一裁决顺序：先按考试日期紧迫度，再按权重和掌握度
-- 暂定信息标记"待确认"`;
-    },
-  },
-
-  final: {
-    title: '考前收口',
-    icon: '🎯',
-    desc: '临近考试，集中取舍，做最后冲刺',
-    fields: [
-      { id: 'fn_hours', label: '每天可用时间（小时）', type: 'number', placeholder: '如: 8', hint: '考前可适当增加' },
-      { id: 'fn_uncovered', label: '尚未覆盖的范围', type: 'textarea', placeholder: '如: 线代特征值还没看，政治大题没背' },
-      { id: 'fn_weak', label: '已验证的弱项', type: 'textarea', placeholder: '如: 数学二重积分总出错，英语新题型正确率低' },
-      { id: 'fn_day', label: '考试当天安排', type: 'textarea', placeholder: '如: 上午考政治，下午考英语，第二天上午数学下午专业课' },
-    ],
-    build: (v) => {
-      const examDate = Store.get('examDate', '2026-12-21');
-      const days = daysUntil(examDate);
-      const hours = v.fn_hours || '未填写';
-      const uncovered = v.fn_uncovered || '未填写';
-      const weak = v.fn_weak || '未填写';
-      const examDay = v.fn_day || '未填写';
-
-      return `你是考试复习规划师。考试临近，用户需要集中取舍。
-
-## 用户信息
-- 考研日期：${examDate}（距今${days}天）
-- 每天可用时间：${hours}小时
-- 尚未覆盖的范围：${uncovered}
-- 已验证的弱项：${weak}
-- 考试当天安排：${examDay}
-
-## 要求
-请按以下格式输出考前收口方案：
-
-### 1. 收口判断
-- 剩余天数
-- 可覆盖范围（在剩余容量内能完成什么）
-- 必须放弃的范围
-- 取舍依据
-
-### 2. 最后冲刺计划（表格）
-| 日期 | 上午任务 | 下午任务 | 晚间任务 | 验证方式 |
-
-### 3. 考前三天
-- 每天重点
-- 睡眠要求
-- 不做事项（如不做新题、不看新课）
-
-### 4. 考试当天
-- 时间安排
-- 必带物品
-- 答题策略（如先易后难、时间分配）
-
-## 规则
-- 考前以巩固已学内容为主，不开新课
-- 优先覆盖高权重且短期可提升的弱项
-- 保证睡眠，不以通宵换进度
-- 标注哪些范围已无法覆盖，不假装能做完
-- 考前3天以主动回忆+真题套卷模拟为主`;
-    },
-  },
-};
-
-function renderPlannerScene(scene) {
-  const config = PLANNER_SCENES[scene];
-  if (!config) return;
-  const box = document.getElementById('plannerScene');
-
-  let fieldsHtml = '';
-  config.fields.forEach(f => {
-    const tag = f.type === 'textarea' ? 'textarea' : 'input';
-    const cls = f.type === 'textarea' ? 'textarea' : 'input';
-    const tagClose = f.type === 'textarea' ? '</textarea>' : '';
-    fieldsHtml += `
-      <div class="planner-field">
-        <label>${f.label}</label>
-        <${tag} class="${cls}" id="${f.id}" placeholder="${f.placeholder}" ${f.type === 'number' ? 'type="number" step="0.5" style="max-width:200px"' : `style="${f.type === 'textarea' ? '' : 'max-width:500px'}"`}></${tag}>
-        ${f.hint ? `<div class="hint">${f.hint}</div>` : ''}
-      </div>
-    `;
-  });
-
-  box.innerHTML = `
-    <div style="margin-bottom:12px;">
-      <span style="font-size:14px;font-weight:700;">${config.icon} ${config.title}</span>
-      <span style="font-size:12px;color:var(--text-secondary);margin-left:8px;">${config.desc}</span>
-    </div>
-    ${fieldsHtml}
-
-    <div class="planner-action-bar">
-      <button class="btn btn-primary planner-go-btn" onclick="plannerStart()">🚀 开始规划（AI 实时对话）</button>
-      <button class="btn btn-outline" onclick="togglePlannerPrompt()" id="plannerPromptToggle">🔗 改用跳转外部 AI</button>
-      <button class="btn btn-outline" onclick="openPlannerSync()">📤 手动同步到今日目标</button>
-    </div>
-
-    <div id="plannerPromptBox" style="display:none;"></div>
-  `;
-
-  config.fields.forEach(f => {
-    const el = document.getElementById(f.id);
-    if (el) el.oninput = () => updatePlannerPrompt(scene);
-  });
-
-  updatePlannerPrompt(scene);
-}
-
-function updatePlannerPrompt(scene) {
-  const config = PLANNER_SCENES[scene];
-  if (!config) return;
-  const values = {};
-  config.fields.forEach(f => {
-    const el = document.getElementById(f.id);
-    if (el) values[f.id] = el.value.trim();
-  });
-  const prompt = config.build(values);
-  const el = document.getElementById('plannerPromptBox');
-  if (!el) return;
-  el.innerHTML = aiPromptBox(
-    config.title,
-    '点击跳转按钮时，Prompt 会自动复制到剪贴板，到对方网站粘贴发送即可。若复制失败可点「查看 Prompt」手动复制。',
-    prompt
-  );
-}
-
-function togglePlannerPrompt() {
-  const box = document.getElementById('plannerPromptBox');
-  const btn = document.getElementById('plannerPromptToggle');
-  if (!box) return;
-  const show = box.style.display === 'none';
-  box.style.display = show ? 'block' : 'none';
-  if (btn) btn.textContent = show ? '🔽 收起跳转选项' : '🔗 改用跳转外部 AI';
-}
-
-function savePlannerHistory(scene) {
-  const config = PLANNER_SCENES[scene];
-  if (!config) return;
-  const values = {};
-  config.fields.forEach(f => {
-    const el = document.getElementById(f.id);
-    if (el) values[f.id] = el.value.trim();
-  });
-  const prompt = config.build(values);
-  const history = Store.get('plannerHistory', []);
-  history.unshift({
-    id: uid(),
-    scene,
-    title: config.title,
-    prompt: prompt.slice(0, 200) + '...',
-    time: Date.now(),
-  });
-  if (history.length > 30) history.length = 30;
-  Store.set('plannerHistory', history);
-  toast('已保存到规划历史');
-  renderPlannerHistory();
-}
-
-function openPlannerSync() {
-  modal('同步到今日目标', `
-    <p style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;">将AI规划出的任务粘贴到下方（每行一个任务），同步到今日看板的每日目标中。</p>
-    <textarea class="textarea" id="syncTodoText" placeholder="如：&#10;高数极限计算练习 30min&#10;背50个考研单词&#10;听线代网课第3章" style="min-height:160px;"></textarea>
-  `, (m) => {
-    const text = m.querySelector('#syncTodoText').value.trim();
-    if (!text) { toast('请输入任务'); return false; }
-    const tasks = text.split('\n').map(t => t.trim()).filter(t => t);
-    if (!tasks.length) { toast('请输入任务'); return false; }
-    syncPlannerToTodo(tasks);
-    return true;
-  });
-}
-
-function renderPlannerHistory() {
-  const history = Store.get('plannerHistory', []);
-  const el = document.getElementById('plannerHistory');
-  if (!el) return;
-  if (!history.length) {
-    el.innerHTML = '<div class="empty-state"><div class="empty-state-text">暂无规划历史。生成方案后可点击"保存方案"记录。</div></div>';
-    return;
-  }
-  el.innerHTML = history.map((h, i) => `
-    <div class="planner-history-item">
-      <div style="display:flex;align-items:center;margin-bottom:6px;gap:8px;flex-wrap:wrap;">
-        <span style="font-weight:700;font-size:13px;">${PLANNER_SCENES[h.scene]?.icon || '📋'} ${h.title}</span>
-        <span class="ph-tag tag tag-blue">${fmtDate(h.time)}</span>
-        <span style="margin-left:auto;display:flex;gap:6px;">
-          ${h.full ? `<button class="btn btn-outline btn-sm" onclick="viewPlannerHistory(${i})">👁 查看全文</button>` : ''}
-          ${h.full ? `<button class="btn btn-outline btn-sm" onclick="reuseePlannerHistory(${i})">📤 提取任务</button>` : ''}
-          <button class="btn btn-outline btn-sm" style="color:#dc2626;" onclick="delPlannerHistory(${i})">删除</button>
-        </span>
-      </div>
-      <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;max-height:80px;overflow:hidden;">${escapeHtml(h.prompt || '')}</div>
-    </div>
-  `).join('');
-}
-
-function viewPlannerHistory(i) {
-  const h = Store.get('plannerHistory', [])[i];
-  if (!h) return;
-  modal(h.title, `<div class="chat-content" style="max-height:60vh;overflow-y:auto;font-size:13px;line-height:1.7;">${renderMarkdown(h.full || h.prompt || '')}</div>`, null, true);
-}
-
-function reuseePlannerHistory(i) {
-  const h = Store.get('plannerHistory', [])[i];
-  if (!h) return;
-  showExtractModal(extractTaskLines(h.full || h.prompt || ''));
-}
-
-function delPlannerHistory(i) {
-  const list = Store.get('plannerHistory', []);
-  list.splice(i, 1);
-  Store.set('plannerHistory', list);
-  renderPlannerHistory();
-  toast('已删除');
-}
-
-// ===== 数学模块 =====
-modules['math-points'] = (c) => {
-  const points = Store.get('mathPoints', []);
-  const total = points.length;
-  const mastered = points.filter(p => p.done).length;
-  const due = points.filter(p => !p.done && p.nextReview && p.nextReview <= today());
-
-  c.innerHTML = `
-    <div class="quick-links">
-      <a class="quick-link" href="https://www.markji.com/deck/editor/69d50111c8664d4b8ab2aa38" target="_blank">
-        <span class="quick-link-icon">🎴</span>
-        <div class="quick-link-info">
-          <div class="quick-link-name">Markji数学卡组</div>
-          <div class="quick-link-desc">数学知识点记忆卡</div>
-        </div>
-      </a>
-      <a class="quick-link" href="https://mubu.com" target="_blank">
-        <span class="quick-link-icon">🧠</span>
-        <div class="quick-link-info">
-          <div class="quick-link-name">幕布</div>
-          <div class="quick-link-desc">整理思维导图</div>
-        </div>
-      </a>
-      <a class="quick-link" href="https://www.maimemo.com" target="_blank">
-        <span class="quick-link-icon">📱</span>
-        <div class="quick-link-info">
-          <div class="quick-link-name">墨墨记忆卡</div>
-          <div class="quick-link-desc">APP端背诵</div>
-        </div>
-      </a>
-    </div>
-    <div class="card">
-      <div class="card-title">📊 记忆进度</div>
-      <div class="kp-progress-bar">
-        <div class="kp-progress-fill memorizing" style="width:${total ? mastered/total*100 : 0}%;"></div>
-        <div class="kp-progress-text">${mastered}/${total} 已掌握</div>
-      </div>
-      <div class="kp-progress-labels">
-        <span>待复习：${due.length}</span>
-        <span>已掌握：${mastered}</span>
-        <span>总计：${total}</span>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-title">🧮 临界复习点</div>
-      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">
-        基于SM-2记忆算法，以下知识点即将遗忘或已到期，请逐一确认。点击"认识"延长复习间隔，点击"忘记"重置。
-      </p>
-      <div id="reviewQueue"></div>
-    </div>
-    <div class="card">
-      <div class="card-title">📊 公式背诵速查</div>
-      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">
-        来源：Markji「27考研数学公式大全（高数篇）」共 515 个公式，按章节浏览、搜索、标记掌握。
-      </p>
-      <div style="display:flex;gap:8px;margin-bottom:12px;">
-        <input class="input" id="formulaSearch" placeholder="搜索公式名称..." style="flex:1;" oninput="filterFormulas()">
-        <span id="formulaStats" style="font-size:12px;color:var(--text-secondary);line-height:34px;white-space:nowrap;"></span>
-      </div>
-      <div id="formulaChapters" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px;"></div>
-      <div id="formulaList" style="max-height:600px;overflow-y:auto;"></div>
-    </div>
-    <div class="card">
-      <div class="card-title">➕ 添加新知识点</div>
-      <p style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;">添加你正在学习的知识点，系统会自动安排复习时间。</p>
-      <div style="display:flex;gap:8px;margin-bottom:12px;">
-        <select class="select" id="ptSubject" style="width:120px;">
-          <option value="高数">高数</option>
-          <option value="线代">线代</option>
-        </select>
-        <input class="input" id="ptChapter" placeholder="章节（如：极限）" style="width:140px;">
-        <input class="input" id="ptName" placeholder="知识点名称" style="flex:1;" onkeypress="if(event.key==='Enter')addMathPoint()">
-        <button class="btn btn-primary" onclick="addMathPoint()">添加</button>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-title">📚 知识点列表</div>
-      <div id="pointList"></div>
-    </div>
-  `;
-
-  renderReviewQueue();
-  renderPointList(points);
-  loadFormulas();
-};
-
-// SM-2 记忆算法
-function sm2Review(point, quality) {
-  // quality: 0=忘记, 1=模糊, 2=认识
-  if (quality === 0) {
-    point.reps = 0;
-    point.ease = Math.max(1.3, (point.ease || 2.5) - 0.2);
-    point.interval = 1;
-  } else if (quality === 1) {
-    point.ease = Math.max(1.3, (point.ease || 2.5) - 0.15);
-    point.interval = Math.max(1, Math.round((point.interval || 1) * 0.5));
-    point.reps = Math.max(0, (point.reps || 0));
-  } else {
-    point.reps = (point.reps || 0) + 1;
-    point.ease = ((point.ease || 2.5) + 0.1);
-    if (point.reps === 1) point.interval = 1;
-    else if (point.reps === 2) point.interval = 3;
-    else point.interval = Math.round((point.interval || 1) * point.ease);
-    // 超过5轮视为掌握
-    if (point.reps >= 6) {
-      point.done = true;
-      point.nextReview = null;
-      return point;
-    }
-  }
-  const d = new Date();
-  d.setDate(d.getDate() + point.interval);
-  point.nextReview = d.toISOString().slice(0, 10);
-  point.lastReview = today();
-  return point;
-}
-
-function addMathPoint() {
-  const subject = document.getElementById('ptSubject').value;
-  const chapter = document.getElementById('ptChapter').value.trim();
-  const name = document.getElementById('ptName').value.trim();
-  if (!name) return;
-  Store.push('mathPoints', {
-    id: uid(), subject, chapter, name,
-    createdAt: today(),
-    reps: 0,
-    ease: 2.5,
-    interval: 0,
-    nextReview: today(),
-    lastReview: null,
-    done: false
-  });
-  document.getElementById('ptName').value = '';
-  renderReviewQueue();
-  renderPointList(Store.get('mathPoints'));
-  // 更新进度条
-  const points = Store.get('mathPoints', []);
-  const total = points.length;
-  const mastered = points.filter(p => p.done).length;
-  const fillEl = document.querySelector('.kp-progress-fill.memorizing');
-  const textEl = document.querySelector('.kp-progress-text');
-  if (fillEl) fillEl.style.width = `${total ? mastered/total*100 : 0}%`;
-  if (textEl) textEl.textContent = `${mastered}/${total} 已掌握`;
-  toast('已添加知识点');
-}
-
-function renderReviewQueue() {
-  const points = Store.get('mathPoints', []);
-  const due = points.filter(p => !p.done && p.nextReview && p.nextReview <= today());
-  const el = document.getElementById('reviewQueue');
-  if (!el) return;
-  if (!due.length) {
-    el.innerHTML = '<div class="empty-state"><div class="empty-state-text">🎉 今天没有需要复习的知识点！</div></div>';
-    return;
-  }
-  el.innerHTML = due.map(p => `
-    <div class="review-item due">
-      <div class="review-info">
-        <div class="review-name">${p.name}</div>
-        <div class="review-meta">${p.subject} · ${p.chapter || '未分类'} · 已复习${p.reps || 0}次 · 难度${((p.ease || 2.5)).toFixed(1)}</div>
-      </div>
-      <button class="btn btn-success btn-sm" onclick="reviewMathPoint('${p.id}',2)">✅ 认识</button>
-      <button class="btn btn-outline btn-sm" style="color:var(--warning);" onclick="reviewMathPoint('${p.id}',1)">🟡 模糊</button>
-      <button class="btn btn-outline btn-sm" style="color:var(--danger);" onclick="reviewMathPoint('${p.id}',0)">❌ 忘记</button>
-      <a class="btn btn-outline btn-sm" href="https://www.markji.com/deck/editor/69d50111c8664d4b8ab2aa38" target="_blank">去Markji</a>
-    </div>
-  `).join('');
-}
-
-function reviewMathPoint(id, quality) {
-  const points = Store.get('mathPoints', []);
-  const p = points.find(x => x.id === id);
-  if (!p) return;
-  sm2Review(p, quality);
-  Store.set('mathPoints', points);
-  renderReviewQueue();
-  renderPointList(points);
-  // 更新进度
-  const total = points.length;
-  const mastered = points.filter(x => x.done).length;
-  const fillEl = document.querySelector('.kp-progress-fill.memorizing');
-  const textEl = document.querySelector('.kp-progress-text');
-  if (fillEl) fillEl.style.width = `${total ? mastered/total*100 : 0}%`;
-  if (textEl) textEl.textContent = `${mastered}/${total} 已掌握`;
-  toast(quality === 2 ? '已标记为认识' : quality === 1 ? '已标记为模糊' : '已标记为忘记');
-}
-
-function renderPointList(points) {
-  const el = document.getElementById('pointList');
-  if (!points.length) {
-    el.innerHTML = '<div class="empty-state"><div class="empty-state-text">还没有知识点，添加一个开始吧~</div></div>';
-    return;
-  }
-  const bySubject = {};
-  points.forEach(p => {
-    if (!bySubject[p.subject]) bySubject[p.subject] = [];
-    bySubject[p.subject].push(p);
-  });
-  let html = '';
-  for (const subject in bySubject) {
-    html += `<div style="margin-bottom:16px;"><div style="font-weight:700;margin-bottom:8px;">${subject}</div>`;
-    const byChapter = {};
-    bySubject[subject].forEach(p => {
-      if (!byChapter[p.chapter]) byChapter[p.chapter] = [];
-      byChapter[p.chapter].push(p);
-    });
-    for (const ch in byChapter) {
-      html += `<div style="margin-left:12px;margin-bottom:8px;"><div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:4px;">${ch || '未分类'}</div>`;
-      byChapter[ch].forEach(p => {
-        const stageTag = p.done ? 'tag-green' : (p.reps || 0) === 0 ? 'tag-gray' : `tag-blue`;
-        const stageText = p.done ? '✅ 已掌握' : `复习${p.reps || 0}次`;
-        html += `
-          <div class="knowledge-item">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-              <div>
-                <span class="knowledge-title">${p.name}</span>
-                <span class="tag ${stageTag}" style="margin-left:8px;">${stageText}</span>
-              </div>
-              <div>
-                ${p.nextReview ? `<span style="font-size:11px;color:var(--text-light);">下次：${p.nextReview}</span>` : ''}
-                <button class="todo-delete" onclick="delMathPoint('${p.id}')">✕</button>
-              </div>
-            </div>
-          </div>
-        `;
-      });
-      html += '</div>';
-    }
-    html += '</div>';
-  }
-  el.innerHTML = html;
-}
-
-function delMathPoint(id) {
-  Store.removeIn('mathPoints', id);
-  renderReviewQueue();
-  renderPointList(Store.get('mathPoints'));
-}
-
-// ===== 公式背诵（Markji 高数公式大全）=====
-let _formulas = [];
-let _formulaChapter = 'all';
-let _formulaLoaded = false;
-
-function loadFormulas() {
-  if (_formulaLoaded) { renderFormulaList(); return; }
-  fetch('api/math-formulas.json').then(r => r.json()).then(data => {
-    _formulas = data.items || [];
-    _formulaLoaded = true;
-    renderFormulaChapters();
-    renderFormulaList();
-  }).catch(e => {
-    const el = document.getElementById('formulaList');
-    if (el) el.innerHTML = '<p style="color:var(--text-light);text-align:center;padding:16px;">加载失败，请确认服务器运行中</p>';
-  });
-}
-
-function renderFormulaChapters() {
-  const el = document.getElementById('formulaChapters');
-  if (!el) return;
-  const chapters = [...new Set(_formulas.map(f => f.chapter))];
-  const mastered = Store.get('formulaMastered', {});
-  let html = `<button class="btn btn-sm ${_formulaChapter==='all'?'btn-primary':'btn-outline'}" onclick="setFormulaChapter('all')" style="margin:0;">全部 (${_formulas.length})</button>`;
-  chapters.forEach(ch => {
-    const count = _formulas.filter(f => f.chapter === ch).length;
-    const masteredCount = _formulas.filter(f => f.chapter === ch && mastered[f.id]).length;
-    html += `<button class="btn btn-sm ${_formulaChapter===ch?'btn-primary':'btn-outline'}" onclick="setFormulaChapter('${ch.replace(/'/g,"\\'")}')" style="margin:0;font-size:12px;">${ch} (${masteredCount}/${count})</button>`;
-  });
-  el.innerHTML = html;
-}
-
-function setFormulaChapter(ch) {
-  _formulaChapter = ch;
-  renderFormulaChapters();
-  renderFormulaList();
-}
-
-function filterFormulas() {
-  renderFormulaList();
-}
-
-function renderFormulaList() {
-  const el = document.getElementById('formulaList');
-  if (!el) return;
-  const search = (document.getElementById('formulaSearch')?.value || '').trim().toLowerCase();
-  const mastered = Store.get('formulaMastered', {});
-  
-  let filtered = _formulas;
-  if (_formulaChapter !== 'all') {
-    filtered = filtered.filter(f => f.chapter === _formulaChapter);
-  }
-  if (search) {
-    filtered = filtered.filter(f => f.title.toLowerCase().includes(search) || f.chapter.toLowerCase().includes(search));
-  }
-  
-  const stats = document.getElementById('formulaStats');
-  if (stats) {
-    const masteredCount = filtered.filter(f => mastered[f.id]).length;
-    stats.textContent = `${masteredCount}/${filtered.length} 已掌握`;
-  }
-  
-  if (!filtered.length) {
-    el.innerHTML = '<p style="color:var(--text-light);text-align:center;padding:16px;">未找到匹配的公式</p>';
-    return;
-  }
-  
-  // Group by chapter
-  const byChapter = {};
-  filtered.forEach(f => {
-    if (!byChapter[f.chapter]) byChapter[f.chapter] = [];
-    byChapter[f.chapter].push(f);
-  });
-  
-  let html = '';
-  for (const ch in byChapter) {
-    html += `<div style="font-weight:700;font-size:13px;margin:8px 0 4px;padding:4px 8px;background:var(--primary-light);border-radius:6px;color:var(--primary);">${ch}</div>`;
-    byChapter[ch].forEach(f => {
-      const isMastered = mastered[f.id];
-      html += `
-        <div class="knowledge-item" style="display:flex;justify-content:space-between;align-items:center;">
-          <span class="knowledge-title" style="${isMastered?'color:var(--text-light);text-decoration:line-through;':''}">${f.title}</span>
-          <div style="display:flex;gap:4px;flex-shrink:0;">
-            <button class="btn btn-sm ${isMastered?'btn-success':'btn-outline'}" onclick="toggleFormulaMastered('${f.id}')" style="font-size:11px;padding:2px 8px;">${isMastered?'✓ 已掌握':'掌握'}</button>
-            <a class="btn btn-sm btn-outline" href="https://www.markji.com/deck/63098585634a5d0ae1151c3a" target="_blank" style="font-size:11px;padding:2px 8px;text-decoration:none;">Markji</a>
-          </div>
-        </div>
-      `;
-    });
-  }
-  el.innerHTML = html;
-}
-
-function toggleFormulaMastered(id) {
-  const mastered = Store.get('formulaMastered', {});
-  if (mastered[id]) delete mastered[id];
-  else mastered[id] = true;
-  Store.set('formulaMastered', mastered);
-  renderFormulaChapters();
-  renderFormulaList();
 }
 
 // ----- 通用网课入口（支持分组）-----
@@ -4202,11 +3197,17 @@ modules['eng-exam'] = (c) => {
 
   c.innerHTML = `
     <div class="card">
-      <div class="card-title">📑 历年真题 PDF（2010-2022）</div>
-      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">
-        点击年份打开真题 PDF，再点「解析」查看详解。
+      <div class="card-title">📑 真题资料库（按年份 × 题型）</div>
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:10px;line-height:1.6;">
+        三套资料：<b>答案速查</b>（快速对答案）/ <b>真题解析及复习思路</b>（逐题详解）/ <b>逐词逐句精讲册</b>（逐句翻译）。
+        本地版🖥️一点即开 PDF；云端/手机版请点 📋 复制路径，再到电脑资源管理器打开。
       </p>
-      <div id="engPdfList" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px;"></div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+        <span style="font-size:12px;color:var(--text-secondary);">视图：</span>
+        <button class="btn btn-outline btn-sm ${_engExamView==='year'?'active':''}" onclick="_engExamView='year';renderEnglishExams()">📅 按年份</button>
+        <button class="btn btn-outline btn-sm ${_engExamView==='type'?'active':''}" onclick="_engExamView='type';renderEnglishExams()">🗂️ 按题型</button>
+      </div>
+      <div id="engPdfList" style="display:flex;flex-direction:column;gap:10px;"></div>
     </div>
     <div class="card">
       <div class="card-title">✏️ 按题型记录练习</div>
@@ -4415,30 +3416,60 @@ function toggleEngQBDone(id) {
 }
 
 let _engPdfData = null;
+let _engExamView = 'year';
 
 async function loadEngPdfExams() {
   if (!_engPdfData) {
     try {
-      _engPdfData = { exams: {}, solutions: {} };
+      const res = await fetch('api/english_exams.json');
+      _engPdfData = await res.json();
     } catch (e) {
       const el = document.getElementById('engPdfList');
-      if (el) el.innerHTML = '<div class="empty-state-text">无法加载真题文件</div>';
+      if (el) el.innerHTML = '<div class="empty-state-text">无法加载真题索引（请确认 api/english_exams.json 存在）</div>';
       return;
     }
   }
+  renderEnglishExams();
+}
+
+function renderEnglishExams() {
   const el = document.getElementById('engPdfList');
   if (!el || !_engPdfData) return;
-  const { exams, solutions } = _engPdfData;
-  const years = Object.keys(exams).sort((a, b) => b - a);
-  el.innerHTML = years.map(y => `
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border:1px solid var(--border);border-radius:8px;">
-      <span style="font-weight:600;font-size:14px;">${y}年</span>
-      <div style="display:flex;gap:4px;">
-        <a class="btn btn-outline btn-sm" href="/pdf/eng/${encodeURIComponent(exams[y])}" target="_blank" style="text-decoration:none;font-size:12px;">真题</a>
-        <a class="btn btn-outline btn-sm" href="/pdf/eng_sol/${encodeURIComponent(solutions[y]||'')}" target="_blank" style="text-decoration:none;font-size:12px;color:var(--primary);border-color:var(--primary);">解析</a>
-      </div>
-    </div>
-  `).join('');
+  const { sources, types, exams, yearList } = _engPdfData;
+  if (_engExamView === 'year') {
+    el.innerHTML = yearList.map(y => {
+      const rec = exams[y] || {};
+      const btns = sources.map(s => engSourceBtn(s, rec[s.id])).join('');
+      return `<div class="eng-year-card">
+        <div class="eng-year">${y} 年</div>
+        <div class="eng-src-row">${btns}</div>
+      </div>`;
+    }).join('');
+  } else {
+    el.innerHTML = types.map(t => {
+      const rows = yearList.map(y => {
+        const rec = exams[y] || {};
+        const btns = sources.map(s => engSourceBtn(s, rec[s.id])).join('');
+        return `<div class="eng-type-year"><span class="eng-type-year-name">${y}</span><span class="eng-src-row">${btns}</span></div>`;
+      }).join('');
+      return `<div class="eng-type-card">
+        <div class="eng-type-title">${t.name}（${t.score}分）</div>
+        <div class="eng-type-hint">每套资料均含「${t.name}」，打开对应 PDF 后翻到该题型页（顺序：完形 → 阅读 → 新题型 → 翻译 → 小作文 → 大作文）</div>
+        ${rows}
+      </div>`;
+    }).join('');
+  }
+}
+
+// 生成单套资料的入口按钮（有路径→打开/复制；无路径→标记缺失）
+function engSourceBtn(s, path) {
+  if (!path) return `<span class="eng-src eng-missing">${s.name}<span style="font-size:10px;color:var(--text-light);margin-left:3px;">缺</span></span>`;
+  const fileUrl = 'file:///' + path.replace(/\\/g, '/');
+  const safe = path.replace(/'/g, "\\'");
+  return `<span class="eng-src">
+    <a class="btn btn-outline btn-sm" href="${fileUrl}" target="_blank" style="text-decoration:none;font-size:12px;">${s.name}</a>
+    <button class="btn btn-ghost btn-sm" onclick="copyText('${safe}')" title="复制本地路径">📋</button>
+  </span>`;
 }
 
 // ===== 英语内置题库（从PDF提取） =====
@@ -4597,175 +3628,6 @@ function delEngRecord(typeId, id) {
   switchEngType(typeId);
 }
 
-// ----- 英语长难句 -----
-// ----- 英语长难句（颉斌斌66句每日滚动）-----
-modules['eng-sentence'] = (c) => {
-  const xbbData = Store.get('xbb66', { current: 1, sentences: {} });
-  const current = xbbData.current || 1;
-  const todaySentence = xbbData.sentences[current] || { en: '', grammar: '', zh: '' };
-
-  c.innerHTML = `
-    <div class="quick-links">
-      <a class="quick-link" href="https://www.bilibili.com/video/BV1NQRgYnEvD" target="_blank">
-        <span class="quick-link-icon">📺</span>
-        <div class="quick-link-info">
-          <div class="quick-link-name">颉斌斌66句搞定语法长难句</div>
-          <div class="quick-link-desc">B站课程全集</div>
-        </div>
-      </a>
-    </div>
-    <div class="card">
-      <div class="card-title">📖 颉斌斌66句 · 每日滚动学习</div>
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
-        <div style="flex:1;">
-          <div class="kp-progress-bar">
-            <div class="kp-progress-fill memorizing" style="width:${(current-1)/66*100}%;"></div>
-            <div class="kp-progress-text">第 ${current} / 66 句</div>
-          </div>
-        </div>
-        <button class="btn btn-outline btn-sm" onclick="xbbPrev()">上一句</button>
-        <button class="btn btn-primary btn-sm" onclick="xbbNext()">下一句</button>
-      </div>
-      <div class="sentence-card-xbb" id="xbbCard">
-        <div class="sentence-xbb-num">第 ${current} 句</div>
-        <div class="sentence-xbb-en" id="xbbEn">${todaySentence.en || '（请点击编辑按钮录入今日句子）'}</div>
-        <div class="sentence-xbb-btns">
-          <button class="btn btn-outline btn-sm" onclick="xbbToggle('grammar')">📖 显示语法分析</button>
-          <button class="btn btn-outline btn-sm" onclick="xbbToggle('zh')">📝 显示中文翻译</button>
-          <button class="btn btn-outline btn-sm" onclick="xbbEdit(${current})">✏️ 编辑</button>
-        </div>
-        <div class="sentence-xbb-section" id="xbbGrammar" style="display:none;">
-          <div class="sentence-xbb-label">语法分析</div>
-          <div class="sentence-xbb-content">${todaySentence.grammar || '（暂无）'}</div>
-        </div>
-        <div class="sentence-xbb-section" id="xbbZh" style="display:none;">
-          <div class="sentence-xbb-label">中文翻译</div>
-          <div class="sentence-xbb-content">${todaySentence.zh || '（暂无）'}</div>
-        </div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-title">➕ 自定义长难句</div>
-      <p style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;">除了颉斌斌66句，你也可以添加其他长难句进行分析。</p>
-      <div style="display:flex;gap:8px;margin-bottom:12px;">
-        <input class="input" id="senEn" placeholder="输入英文长难句..." style="flex:1;" onkeypress="if(event.key==='Enter')addSentence()">
-        <button class="btn btn-primary" onclick="addSentence()">添加句子</button>
-      </div>
-    </div>
-    <div id="sentenceList"></div>
-  `;
-
-  renderSentenceList(Store.get('sentences', []));
-};
-
-function xbbToggle(section) {
-  const el = document.getElementById('xbb' + (section === 'grammar' ? 'Grammar' : 'Zh'));
-  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
-}
-
-function xbbEdit(num) {
-  const data = Store.get('xbb66', { current: 1, sentences: {} });
-  const s = data.sentences[num] || { en: '', grammar: '', zh: '' };
-  modal(`编辑第 ${num} 句`, `
-    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">英文原句</label>
-    <textarea class="textarea" id="xbbEnInput" style="margin-bottom:12px;">${s.en}</textarea>
-    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">语法分析</label>
-    <textarea class="textarea" id="xbbGrammarInput" style="margin-bottom:12px;">${s.grammar}</textarea>
-    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">中文翻译</label>
-    <textarea class="textarea" id="xbbZhInput">${s.zh}</textarea>
-  `, (m) => {
-    data.sentences[num] = {
-      en: m.querySelector('#xbbEnInput').value.trim(),
-      grammar: m.querySelector('#xbbGrammarInput').value.trim(),
-      zh: m.querySelector('#xbbZhInput').value.trim()
-    };
-    Store.set('xbb66', data);
-    switchModule('eng-sentence');
-    return true;
-  });
-}
-
-function xbbNext() {
-  const data = Store.get('xbb66', { current: 1, sentences: {} });
-  data.current = Math.min(66, (data.current || 1) + 1);
-  Store.set('xbb66', data);
-  switchModule('eng-sentence');
-}
-
-function xbbPrev() {
-  const data = Store.get('xbb66', { current: 1, sentences: {} });
-  data.current = Math.max(1, (data.current || 1) - 1);
-  Store.set('xbb66', data);
-  switchModule('eng-sentence');
-}
-
-function addSentence() {
-  const en = document.getElementById('senEn').value.trim();
-  if (!en) return;
-  const m = modal('添加长难句', `
-    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">英文原句</label>
-    <div style="font-size:15px;line-height:1.8;margin-bottom:12px;color:var(--text);">${en}</div>
-    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">中文翻译</label>
-    <textarea class="textarea" id="senZh" placeholder="输入中文翻译..." style="margin-bottom:12px;"></textarea>
-    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">语法分析</label>
-    <textarea class="textarea" id="senAnalysis" placeholder="分析句子结构（主语/谓语/从句/修饰成分等）..." style="min-height:120px;"></textarea>
-  `, (modal) => {
-    const zh = modal.querySelector('#senZh').value.trim();
-    const analysis = modal.querySelector('#senAnalysis').value.trim();
-    Store.push('sentences', { id: uid(), en, zh, analysis, time: now() });
-    document.getElementById('senEn').value = '';
-    renderSentenceList(Store.get('sentences'));
-  });
-}
-
-function renderSentenceList(sentences) {
-  const el = document.getElementById('sentenceList');
-  if (!el) return;
-  if (!sentences.length) {
-    el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🔍</div><div class="empty-state-text">还没有自定义长难句记录</div></div>';
-    return;
-  }
-  el.innerHTML = sentences.map((s, i) => `
-    <div class="sentence-card">
-      <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px;">
-        <span style="font-size:12px;color:var(--text-light);">第 ${sentences.length - i} 句</span>
-        <div>
-          <button class="btn btn-outline btn-sm" onclick="editSentence('${s.id}')">编辑</button>
-          <button class="todo-delete" onclick="delSentence('${s.id}')">✕</button>
-        </div>
-      </div>
-      <div class="sentence-en">${s.en}</div>
-      ${s.zh ? `<div class="sentence-zh">📄 ${s.zh}</div>` : ''}
-      ${s.analysis ? `<div class="sentence-analysis"><span class="analysis-tag tag-blue">分析</span>${s.analysis.replace(/\n/g,'<br>')}</div>` : '<div style="font-size:12px;color:var(--text-light);">暂无分析</div>'}
-    </div>
-  `).join('');
-}
-
-function editSentence(id) {
-  const sentences = Store.get('sentences');
-  const s = sentences.find(x => x.id === id);
-  if (!s) return;
-  const m = modal('编辑长难句', `
-    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">英文原句</label>
-    <textarea class="textarea" id="senEn" style="margin-bottom:12px;">${s.en}</textarea>
-    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">中文翻译</label>
-    <textarea class="textarea" id="senZh" style="margin-bottom:12px;">${s.zh || ''}</textarea>
-    <label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">语法分析</label>
-    <textarea class="textarea" id="senAnalysis" style="min-height:120px;">${s.analysis || ''}</textarea>
-  `, (modal) => {
-    s.en = modal.querySelector('#senEn').value.trim();
-    s.zh = modal.querySelector('#senZh').value.trim();
-    s.analysis = modal.querySelector('#senAnalysis').value.trim();
-    Store.set('sentences', sentences);
-    renderSentenceList(sentences);
-  });
-}
-
-function delSentence(id) {
-  Store.removeIn('sentences', id);
-  renderSentenceList(Store.get('sentences'));
-}
-
 // ----- 英语AI作文批改 -----
 modules['eng-essay'] = (c) => {
   c.innerHTML = `
@@ -4826,535 +3688,6 @@ ${content}
     prompt
   );
 }
-
-// ===== 政治模块（统一页面）=====
-modules['politics'] = (c) => {
-  renderCourseModule(c, 'politics', {
-    titleSuffix: '（政治）',
-    extraLinks: [
-      { name: 'Markji政治卡组', url: 'https://www.markji.com/deck/editor/6a6ab653a1889901896b7c95', icon: '🎴' },
-      { name: '幕布', url: 'https://mubu.com', icon: '🧠' }
-    ]
-  });
-
-  // 追加资料直链和每日真题
-  const wordLinks = Store.get('politicsWordLinks', []);
-  const main = document.getElementById('content');
-  const extraHTML = `
-    <div class="card">
-      <div class="card-title">📄 资料直链（Word/PDF）</div>
-      <p style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;">添加Word/PDF等资料链接，一点即达。</p>
-      <div style="display:flex;gap:8px;margin-bottom:12px;">
-        <input class="input" id="wordLinkName" placeholder="资料名称（如：马原背诵笔记）" style="flex:1;">
-        <input class="input" id="wordLinkUrl" placeholder="粘贴链接URL" style="flex:1;">
-        <button class="btn btn-primary" onclick="addPoliticsWordLink()">添加</button>
-      </div>
-      <div id="wordLinkList"></div>
-    </div>
-    <div class="card">
-      <div class="card-title">🎯 每日一题（历年真题选择题）</div>
-      <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;">每天自动出一道历年考研政治选择题，做错自动收入错题本。</p>
-      <div id="dailyQuizArea"></div>
-    </div>
-    <div class="card">
-      <div class="card-title">📕 政治错题本</div>
-      <div id="politicsWrongList"></div>
-    </div>
-  `;
-  // 追加到content
-  const div = document.createElement('div');
-  div.innerHTML = extraHTML;
-  main.appendChild(div);
-
-  renderPoliticsWordLinks(wordLinks);
-  renderDailyQuiz();
-  renderPoliticsWrong();
-};
-
-function addPoliticsWordLink() {
-  const name = document.getElementById('wordLinkName').value.trim();
-  const url = document.getElementById('wordLinkUrl').value.trim();
-  if (!name || !url) return;
-  const links = Store.get('politicsWordLinks', []);
-  links.unshift({ id: uid(), name, url, date: new Date().toISOString() });
-  Store.set('politicsWordLinks', links);
-  document.getElementById('wordLinkName').value = '';
-  document.getElementById('wordLinkUrl').value = '';
-  renderPoliticsWordLinks(links);
-}
-
-function deletePoliticsWordLink(id) {
-  const links = Store.get('politicsWordLinks', []);
-  const filtered = links.filter(l => l.id !== id);
-  Store.set('politicsWordLinks', filtered);
-  renderPoliticsWordLinks(filtered);
-}
-
-function renderPoliticsWordLinks(links) {
-  const el = document.getElementById('wordLinkList');
-  if (!el) return;
-  if (!links.length) {
-    el.innerHTML = '<p style="font-size:13px;color:var(--text-light);text-align:center;padding:16px;">暂无资料链接，点击上方添加</p>';
-    return;
-  }
-  el.innerHTML = links.map(l => `
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;">
-      <div style="display:flex;align-items:center;gap:8px;min-width:0;">
-        <span style="font-size:18px;">📄</span>
-        <div style="min-width:0;">
-          <div style="font-size:14px;font-weight:600;">${l.name}</div>
-          <div style="font-size:11px;color:var(--text-light);">${l.url}</div>
-        </div>
-      </div>
-      <div style="display:flex;gap:4px;flex-shrink:0;">
-        <a class="btn btn-outline btn-sm" href="${l.url}" target="_blank">打开</a>
-        <button class="todo-delete" onclick="deletePoliticsWordLink('${l.id}')">✕</button>
-      </div>
-    </div>
-  `).join('');
-}
-
-// 政治每日真题
-const POLITICS_QUIZ = [
-  { q: '马克思主义哲学的直接理论来源是？', opts: ['德国古典哲学', '英国古典政治经济学', '法国空想社会主义', '黑格尔辩证法'], ans: 0, exp: '马克思主义哲学的直接理论来源是德国古典哲学，特别是黑格尔的辩证法和费尔巴哈的唯物主义。' },
-  { q: '物质的唯一特性是？', opts: ['运动', '客观实在性', '可知性', '规律性'], ans: 1, exp: '物质的唯一特性是客观实在性，它存在于人的意识之外，为人的意识所反映。' },
-  { q: '对立统一规律揭示了？', opts: ['事物发展的动力和源泉', '事物发展的状态和形式', '事物发展的方向和道路', '事物发展的总趋势'], ans: 0, exp: '对立统一规律揭示了事物发展的动力和源泉。质量互变规律揭示了事物发展的状态和形式。否定之否定规律揭示了事物发展的方向和道路。' },
-  { q: '实践是检验真理的唯一标准，这是因为？', opts: ['实践是认识的来源', '实践具有直接现实性', '实践是认识发展的动力', '实践具有社会历史性'], ans: 1, exp: '实践是检验真理的唯一标准，是由真理的本性和实践的特点决定的。实践具有直接现实性，能够把主观和客观联系起来加以比较。' },
-  { q: '社会存在中最基本的是？', opts: ['地理环境', '人口因素', '物质资料生产方式', '社会意识'], ans: 2, exp: '物质资料生产方式是社会存在中最基本的内容，它决定着社会的性质和面貌。' },
-];
-
-function renderDailyQuiz() {
-  const el = document.getElementById('dailyQuizArea');
-  if (!el) return;
-  const dayStr = today();
-  const seed = dayStr.split('-').join('');
-  const idx = parseInt(seed) % POLITICS_QUIZ.length;
-  const quiz = POLITICS_QUIZ[idx];
-  const answered = Store.get('politicsQuizAnswered', {});
-  const isAnswered = answered[dayStr];
-
-  el.innerHTML = `
-    <div style="background:var(--primary-light);border-radius:var(--radius);padding:16px;margin-bottom:12px;">
-      <div style="font-size:12px;color:var(--primary);font-weight:700;margin-bottom:6px;">${dayStr} 每日一题</div>
-      <div style="font-size:15px;font-weight:600;margin-bottom:12px;">${quiz.q}</div>
-      <div id="quizOpts">
-        ${quiz.opts.map((opt, i) => `
-          <div style="padding:8px 12px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;cursor:pointer;font-size:13px;" onclick="answerQuiz(${i})" id="quizOpt${i}">
-            ${String.fromCharCode(65+i)}. ${opt}
-          </div>
-        `).join('')}
-      </div>
-      <div id="quizResult"></div>
-    </div>
-  `;
-  if (isAnswered !== undefined) {
-    showQuizResult(quiz, isAnswered);
-  }
-}
-
-function answerQuiz(idx) {
-  const dayStr = today();
-  const seed = dayStr.split('-').join('');
-  const quizIdx = parseInt(seed) % POLITICS_QUIZ.length;
-  const quiz = POLITICS_QUIZ[quizIdx];
-  const answered = Store.get('politicsQuizAnswered', {});
-  if (answered[dayStr] !== undefined) return;
-  answered[dayStr] = idx;
-  Store.set('politicsQuizAnswered', answered);
-  if (idx !== quiz.ans) {
-    // 加入错题本
-    const wrongs = Store.get('politicsWrong', []);
-    wrongs.unshift({ id: uid(), q: quiz.q, yourAns: quiz.opts[idx], correctAns: quiz.opts[quiz.ans], exp: quiz.exp, date: dayStr });
-    Store.set('politicsWrong', wrongs);
-    toast('答错了，已收入错题本');
-  } else {
-    toast('答对了！');
-  }
-  showQuizResult(quiz, idx);
-  renderPoliticsWrong();
-}
-
-function showQuizResult(quiz, userAns) {
-  const el = document.getElementById('quizResult');
-  if (!el) return;
-  const correct = userAns === quiz.ans;
-  el.innerHTML = `
-    <div style="margin-top:12px;padding:12px;border-radius:6px;background:${correct ? '#ebfbee' : '#fff0f6'};border:1px solid ${correct ? '#2f9e44' : '#d6336c'};">
-      <div style="font-size:13px;font-weight:700;color:${correct ? '#2f9e44' : '#d6336c'};">
-        ${correct ? '✅ 回答正确！' : '❌ 回答错误'}
-      </div>
-      ${!correct ? `<div style="font-size:13px;margin-top:4px;">你的答案：${quiz.opts[userAns]}</div><div style="font-size:13px;">正确答案：${quiz.opts[quiz.ans]}</div>` : ''}
-      <div style="font-size:12px;color:var(--text-secondary);margin-top:6px;">💡 ${quiz.exp}</div>
-    </div>
-  `;
-  // 禁用选项点击
-  quiz.opts.forEach((_, i) => {
-    const optEl = document.getElementById('quizOpt' + i);
-    if (optEl) {
-      optEl.style.cursor = 'default';
-      optEl.style.pointerEvents = 'none';
-      if (i === quiz.ans) optEl.style.background = '#ebfbee';
-      else if (i === userAns) optEl.style.background = '#fff0f6';
-    }
-  });
-}
-
-function renderPoliticsWrong() {
-  const wrongs = Store.get('politicsWrong', []);
-  const el = document.getElementById('politicsWrongList');
-  if (!el) return;
-  if (!wrongs.length) {
-    el.innerHTML = '<div class="empty-state"><div class="empty-state-text">暂无错题</div></div>';
-    return;
-  }
-  el.innerHTML = wrongs.map(w => `
-    <div class="knowledge-item" style="border-left:4px solid var(--danger);">
-      <div class="knowledge-title">${w.q}</div>
-      <div style="font-size:12px;color:var(--danger);margin-top:4px;">你的答案：${w.yourAns}</div>
-      <div style="font-size:12px;color:var(--success);">正确答案：${w.correctAns}</div>
-      <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">💡 ${w.exp}</div>
-      <div style="font-size:11px;color:var(--text-light);margin-top:4px;">${w.date}</div>
-    </div>
-  `).join('');
-}
-
-// ===== 专业课模块（GIS/RS/GPS）=====
-const MAJOR_DATA = {
-  GIS: {
-    name: 'GIS系统', icon: '🗺️',
-    textbook: '《地理信息系统教程》(第二版) 汤国安主编, 高等教育出版社, 2019',
-    chapters: [
-      { id: 'gis-p1', name: '第一部分：GIS的基本概念', sections: [
-        'GIS的基本概念', 'GIS的组成和功能', 'GIS与其他学科的关系', 'GIS应用范畴', 'GIS发展历程', 'GIS的发展趋势与研究热点'
-      ]},
-      { id: 'gis-p2', name: '第二部分：地理空间数据采集与管理', sections: [
-        '地理空间数学基础', '地理空间与空间数据模型', '空间数据与空间数据结构', '空间数据组织与管理', '空间数据采集与处理'
-      ]},
-      { id: 'gis-p3', name: '第三部分：空间数据分析', sections: [
-        '空间数据分析的概念', '空间对象的基本度量方法', '常用空间分析方法', 'DEM的概念与建模', '数字地形分析', '空间统计的概念与基本统计量', '空间数据分析方法', '空间数据插值', '空间统计分析与空间关系建模'
-      ]},
-      { id: 'gis-p4', name: '第四部分：地理信息可视化', sections: [
-        '地理信息可视化的概念', '地理信息输出方式与类型', '地理信息可视化的原则', '地理信息可视化的形式'
-      ]}
-    ]
-  },
-  RS: {
-    name: 'RS遥感', icon: '🛰️',
-    textbook: '《遥感原理与应用》(第四版) 方圣辉等著, 武汉大学出版社, 2024',
-    chapters: [
-      { id: 'rs-p1', name: '第一部分：遥感的基本概念', sections: [
-        '遥感的定义', '遥感分类', '遥感技术系统（遥感过程）'
-      ]},
-      { id: 'rs-p2', name: '第二部分：遥感物理基础', sections: [
-        '电磁辐射的物理量', '黑体辐射规律', '太阳辐射经过大气层的物理传输过程与机理', '大气窗口的概念和应用', '地物反射规律', '典型地物的反射波谱特征'
-      ]},
-      { id: 'rs-p3', name: '第三部分：遥感成像原理', sections: [
-        '遥感图像特征参数的概念与理解', '扫描成像传感器工作原理', '侧视雷达传感器工作原理'
-      ]},
-      { id: 'rs-p4', name: '第四部分：遥感图像处理与应用', sections: [
-        '遥感图像校正（大气校正和几何校正）', '遥感图像运算的原理与方法', '空间滤波的原理与方法', '多光谱变换及彩色变换的原理与方法'
-      ]},
-      { id: 'rs-p5', name: '第五部分：遥感图像计算机解译', sections: [
-        '遥感图像分类的概念与原理', '特征提取的定义及意义', '特征提取的方法', '监督分类的定义及方法', '监督分类和非监督分类的区别', '深度学习等AI技术在遥感领域的应用', '遥感技术的发展趋势'
-      ]}
-    ]
-  },
-  GPS: {
-    name: 'GPS定位', icon: '📡',
-    textbook: '《GPS测量与数据处理》(第四版) 李征航等著, 武汉大学出版社, 2024',
-    chapters: [
-      { id: 'gps-p1', name: '第一部分：绪论与GNSS时空基准', sections: [
-        'GNSS定位技术的优越性', 'GNSS发展历程', 'GNSS基本定位原理', 'GNSS系统及各系统特点', 'PNT',
-        'UTC/TAI/GPST/BDT时间系统含义及转换', 'GPS周、年积日与公历互换', '天球坐标系与地球坐标系表达及相互转换'
-      ]},
-      { id: 'gps-p2', name: '第二部分：全球定位系统的组成及信号结构', sections: [
-        'GNSS系统组成及功能', 'GNSS卫星信号分类', '导航电文含义和内容', '开普勒轨道六参数', '广播星历和精密星历'
-      ]},
-      { id: 'gps-p3', name: '第三部分：GNSS定位中的误差源、定位方法', sections: [
-        'GNSS定位误差源分类', '钟误差', '卫星星历误差', '电离层延迟', '对流层延迟', '多路径误差',
-        '伪距观测方程', '载波相位观测方程', '线性化及误差方程解算', '精度评定',
-        '单差/双差/三差观测值', '宽巷/窄巷/无电离层延迟观测值', '周跳探测及修复方法', '整周模糊度解算方法',
-        'DOP分类与表达', '网络RTK', 'CORS', '差分GNSS的发展'
-      ]},
-      { id: 'gps-p4', name: '第四部分：GNSS控制网的技术设计、外业与数据处理', sections: [
-        'GNSS网的建立过程', 'GNSS测量的基本概念', 'GNSS网精度密度设计', '基准设计', '布网形式', '图形设计和设计指标',
-        '作业调度', '观测作业', '成果验收和上交资料',
-        'RINEX/SP3数据格式', 'GNSS基线解算模式', '质量控制指标和参考指标', 'GNSS网平差整体流程', 'GNSS高程测量'
-      ]}
-    ]
-  }
-};
-
-function makeMajorModule(subject) {
-  const cfg = MAJOR_DATA[subject];
-  if (!cfg) return () => {};
-  return (c) => {
-    // 计算总知识点数和已完成数
-    const allSections = cfg.chapters.flatMap(ch => ch.sections);
-    const totalSections = allSections.length;
-    const orgProgress = Store.get(`major_orgProgress_${subject}`, {});
-    const organizedCount = Object.values(orgProgress).filter(Boolean).length;
-    const memData = Store.get(`major_memorize_${subject}`, { rounds: [{ name: '第一轮', items: {} }] });
-    const clozeStatus = Store.get(`major_cloze_${subject}`, {});
-
-    c.innerHTML = `
-      <div class="quick-links">
-        <a class="quick-link" href="https://mubu.com" target="_blank">
-          <span class="quick-link-icon">🧠</span>
-          <div class="quick-link-info"><div class="quick-link-name">幕布</div><div class="quick-link-desc">${cfg.name}思维导图</div></div>
-        </a>
-      </div>
-      <div class="card">
-        <div class="card-title">${cfg.icon} ${cfg.name}</div>
-        <p style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">教材：${cfg.textbook}</p>
-        <!-- Markji 牌组管理 -->
-        <div style="margin-bottom:16px;">
-          <div style="font-size:13px;font-weight:700;margin-bottom:6px;">🎴 Markji 牌组</div>
-          <div id="markjiLinks_${subject}"></div>
-          <div style="display:flex;gap:6px;margin-top:6px;">
-            <input class="input" id="mkjName_${subject}" placeholder="牌组名称" style="flex:1;font-size:13px;">
-            <input class="input" id="mkjUrl_${subject}" placeholder="牌组链接" style="flex:1;font-size:13px;">
-            <button class="btn btn-outline btn-sm" onclick="addMarkjiLink('${subject}')">+ 添加</button>
-          </div>
-        </div>
-      </div>
-      <!-- 知识点整理进度条 -->
-      <div class="card">
-        <div class="card-title">📊 知识点整理进度</div>
-        <div class="kp-progress-bar">
-          <div class="kp-progress-fill organizing" style="width:${totalSections ? organizedCount/totalSections*100 : 0}%;"></div>
-          <div class="kp-progress-text">${organizedCount}/${totalSections} 已整理</div>
-        </div>
-        <div style="margin-top:12px;">
-          ${cfg.chapters.map(ch => `
-            <div style="margin-bottom:12px;">
-              <div style="font-size:13px;font-weight:700;color:var(--primary);margin-bottom:6px;">${ch.name}</div>
-              ${ch.sections.map((sec, si) => {
-                const secId = `${ch.id}_${si}`;
-                const done = orgProgress[secId];
-                return `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:13px;">
-                  <input type="checkbox" ${done ? 'checked' : ''} onchange="toggleOrgProgress('${subject}','${secId}')" style="accent-color:var(--primary);">
-                  <span style="${done ? 'text-decoration:line-through;color:var(--text-light);' : ''}">${sec}</span>
-                </div>`;
-              }).join('')}
-            </div>
-          `).join('')}
-        </div>
-      </div>
-      <!-- 知识点背诵进度条 -->
-      <div class="card">
-        <div class="card-title">📋 知识点背诵进度</div>
-        <div class="kp-round-tabs" id="memRounds_${subject}">
-          ${memData.rounds.map((r, i) => `<span class="kp-round-tab ${i === memData.rounds.length - 1 ? 'active' : ''}" onclick="switchMemRound('${subject}',${i})">${r.name}</span>`).join('')}
-          <span class="kp-round-tab" onclick="addMemRound('${subject}')" style="color:var(--primary);">+ 新增轮次</span>
-        </div>
-        <div class="kp-progress-bar">
-          <div class="kp-progress-fill memorizing" id="memBar_${subject}" style="width:0%;"></div>
-          <div class="kp-progress-text" id="memText_${subject}">0/0 已背诵</div>
-        </div>
-        <div id="memClozeList_${subject}"></div>
-      </div>
-      ${COURSE_CLOUD_TIP}
-      <div class="card">
-        <div class="card-title">🎬 ${cfg.name}网课入口</div>
-        <div id="courseGroupList_${subject}"></div>
-      </div>
-      <div class="card">
-        <div class="card-title">📄 资料直链</div>
-        <div style="display:flex;gap:8px;margin-bottom:12px;">
-          <input class="input" id="majorDocName_${subject}" placeholder="资料名称" style="flex:1;font-size:13px;">
-          <input class="input" id="majorDocUrl_${subject}" placeholder="链接URL" style="flex:1;font-size:13px;">
-          <button class="btn btn-primary btn-sm" onclick="addMajorDoc('${subject}')">添加</button>
-        </div>
-        <div id="majorDocList_${subject}"></div>
-      </div>
-    `;
-
-    // 渲染 Markji 链接
-    renderMarkjiLinks(subject);
-    // 渲染网课分组
-    renderCourseGroups(subject);
-    // 渲染资料直链
-    renderMajorDocs(subject);
-    // 渲染背诵进度
-    updateMemProgress(subject);
-    // 渲染挖空背诵
-    renderMemClozeList(subject);
-  };
-}
-
-function addMarkjiLink(subject) {
-  const name = document.getElementById(`mkjName_${subject}`).value.trim();
-  const url = document.getElementById(`mkjUrl_${subject}`).value.trim();
-  if (!name || !url) { toast('请填写完整'); return; }
-  const links = Store.get(`markjiLinks_${subject}`, []);
-  links.push({ id: uid(), name, url });
-  Store.set(`markjiLinks_${subject}`, links);
-  document.getElementById(`mkjName_${subject}`).value = '';
-  document.getElementById(`mkjUrl_${subject}`).value = '';
-  renderMarkjiLinks(subject);
-  toast('已添加');
-}
-
-function delMarkjiLink(subject, id) {
-  const links = Store.get(`markjiLinks_${subject}`, []);
-  Store.set(`markjiLinks_${subject}`, links.filter(l => l.id !== id));
-  renderMarkjiLinks(subject);
-}
-
-function renderMarkjiLinks(subject) {
-  const links = Store.get(`markjiLinks_${subject}`, []);
-  const el = document.getElementById(`markjiLinks_${subject}`);
-  if (!el) return;
-  if (!links.length) {
-    el.innerHTML = '<div style="font-size:12px;color:var(--text-light);">暂无Markji牌组链接</div>';
-    return;
-  }
-  el.innerHTML = links.map(l => `
-    <div class="course-group-item">
-      <span>🎴</span>
-      <span style="flex:1;font-size:13px;font-weight:600;">${l.name}</span>
-      <a class="btn btn-primary btn-sm" href="${l.url}" target="_blank" style="font-size:11px;padding:2px 8px;">打开</a>
-      <button class="todo-delete" onclick="delMarkjiLink('${subject}','${l.id}')">✕</button>
-    </div>
-  `).join('');
-}
-
-function toggleOrgProgress(subject, secId) {
-  const data = Store.get(`major_orgProgress_${subject}`, {});
-  data[secId] = !data[secId];
-  Store.set(`major_orgProgress_${subject}`, data);
-  // 刷新进度条
-  const cfg = MAJOR_DATA[subject];
-  const total = cfg.chapters.flatMap(ch => ch.sections).length;
-  const done = Object.values(data).filter(Boolean).length;
-  const bar = document.querySelector('.kp-progress-fill.organizing');
-  const text = document.querySelector('.kp-progress-text');
-  if (bar) bar.style.width = `${total ? done/total*100 : 0}%`;
-  if (text) text.textContent = `${done}/${total} 已整理`;
-  // 刷新checkbox样式
-  switchModule(currentModule);
-}
-
-function addMemRound(subject) {
-  const name = prompt('输入轮次名称（如：第二轮、强化背诵）：');
-  if (!name || !name.trim()) return;
-  const data = Store.get(`major_memorize_${subject}`, { rounds: [{ name: '第一轮', items: {} }] });
-  data.rounds.push({ name: name.trim(), items: {} });
-  Store.set(`major_memorize_${subject}`, data);
-  switchModule(currentModule);
-}
-
-function switchMemRound(subject, idx) {
-  Store.set(`major_memCurrentRound_${subject}`, idx);
-  switchModule(currentModule);
-}
-
-function updateMemProgress(subject) {
-  const data = Store.get(`major_memorize_${subject}`, { rounds: [{ name: '第一轮', items: {} }] });
-  const currentRound = Store.get(`major_memCurrentRound_${subject}`, data.rounds.length - 1);
-  const round = data.rounds[currentRound] || data.rounds[0];
-  const cfg = MAJOR_DATA[subject];
-  const allSections = cfg.chapters.flatMap(ch => ch.sections);
-  const total = allSections.length;
-  const items = round.items || {};
-  const done = Object.values(items).filter(v => v === 'familiar').length;
-  const blur = Object.values(items).filter(v => v === 'blur').length;
-  const forgot = Object.values(items).filter(v => v === 'forgot').length;
-  const studied = done + blur + forgot;
-  const bar = document.getElementById(`memBar_${subject}`);
-  const text = document.getElementById(`memText_${subject}`);
-  if (bar) bar.style.width = `${total ? studied/total*100 : 0}%`;
-  if (text) text.textContent = `${studied}/${total} 已背诵（熟悉${done}·模糊${blur}·忘记${forgot}）`;
-}
-
-function renderMemClozeList(subject) {
-  const data = Store.get(`major_memorize_${subject}`, { rounds: [{ name: '第一轮', items: {} }] });
-  const currentRound = Store.get(`major_memCurrentRound_${subject}`, data.rounds.length - 1);
-  const round = data.rounds[currentRound] || data.rounds[0];
-  const items = round.items || {};
-  const cfg = MAJOR_DATA[subject];
-  const el = document.getElementById(`memClozeList_${subject}`);
-  if (!el) return;
-  let html = '<div style="margin-top:12px;font-size:13px;font-weight:700;margin-bottom:8px;">知识点挖空背诵（标记掌握程度）</div>';
-  cfg.chapters.forEach(ch => {
-    html += `<div style="margin-bottom:10px;"><div style="font-size:12px;font-weight:600;color:var(--primary);margin-bottom:4px;">${ch.name}</div>`;
-    ch.sections.forEach((sec, si) => {
-      const secId = `${ch.id}_${si}`;
-      const status = items[secId];
-      const cls = status === 'familiar' ? 'familiar' : status === 'blur' ? 'blur' : status === 'forgot' ? 'forgot' : '';
-      html += `
-        <div class="kp-cloze-item ${cls}">
-          <span style="flex:1;">${sec}</span>
-          <div class="kp-cloze-btns">
-            <button class="kp-btn-familiar" onclick="setMemStatus('${subject}','${secId}','familiar')">熟悉</button>
-            <button class="kp-btn-blur" onclick="setMemStatus('${subject}','${secId}','blur')">模糊</button>
-            <button class="kp-btn-forgot" onclick="setMemStatus('${subject}','${secId}','forgot')">忘记</button>
-          </div>
-        </div>
-      `;
-    });
-    html += '</div>';
-  });
-  el.innerHTML = html;
-}
-
-function setMemStatus(subject, secId, status) {
-  const data = Store.get(`major_memorize_${subject}`, { rounds: [{ name: '第一轮', items: {} }] });
-  const currentRound = Store.get(`major_memCurrentRound_${subject}`, data.rounds.length - 1);
-  if (!data.rounds[currentRound]) data.rounds[currentRound] = { name: '当前轮', items: {} };
-  if (!data.rounds[currentRound].items) data.rounds[currentRound].items = {};
-  // 如果再次点击相同状态则取消
-  if (data.rounds[currentRound].items[secId] === status) {
-    delete data.rounds[currentRound].items[secId];
-  } else {
-    data.rounds[currentRound].items[secId] = status;
-  }
-  Store.set(`major_memorize_${subject}`, data);
-  updateMemProgress(subject);
-  renderMemClozeList(subject);
-}
-
-function addMajorDoc(subject) {
-  const name = document.getElementById(`majorDocName_${subject}`).value.trim();
-  const url = document.getElementById(`majorDocUrl_${subject}`).value.trim();
-  if (!name || !url) return;
-  const docs = Store.get(`majorDocs_${subject}`, []);
-  docs.unshift({ id: uid(), name, url });
-  Store.set(`majorDocs_${subject}`, docs);
-  document.getElementById(`majorDocName_${subject}`).value = '';
-  document.getElementById(`majorDocUrl_${subject}`).value = '';
-  renderMajorDocs(subject);
-  toast('已添加');
-}
-
-function delMajorDoc(subject, id) {
-  const docs = Store.get(`majorDocs_${subject}`, []);
-  Store.set(`majorDocs_${subject}`, docs.filter(d => d.id !== id));
-  renderMajorDocs(subject);
-}
-
-function renderMajorDocs(subject) {
-  const docs = Store.get(`majorDocs_${subject}`, []);
-  const el = document.getElementById(`majorDocList_${subject}`);
-  if (!el) return;
-  if (!docs.length) {
-    el.innerHTML = '<div style="font-size:12px;color:var(--text-light);">暂无资料链接</div>';
-    return;
-  }
-  el.innerHTML = docs.map(d => `
-    <div class="course-group-item">
-      <span>📄</span>
-      <span style="flex:1;font-size:13px;font-weight:600;">${d.name}</span>
-      <a class="btn btn-primary btn-sm" href="${d.url}" target="_blank" style="font-size:11px;padding:2px 8px;">打开</a>
-      <button class="todo-delete" onclick="delMajorDoc('${subject}','${d.id}')">✕</button>
-    </div>
-  `).join('');
-}
-
-modules['major-gis'] = makeMajorModule('GIS');
-modules['major-rs'] = makeMajorModule('RS');
-modules['major-gps'] = makeMajorModule('GPS');
 
 // ===== 番茄钟 =====
 let pomoTimer = null;
@@ -5598,6 +3931,19 @@ function delMemo(id) {
 
 // ===== 初始化 =====
 function init() {
+  // [v2/T03] 数据迁移：必须在任何模块渲染之前执行，且失败不阻塞启动
+  try {
+    const mg = migrateV1toV2();
+    if (mg.migrated) {
+      console.info('[init] 数据已升级到 v' + mg.to, mg.log);
+      setTimeout(() => toast('数据已升级到 v2'), 400);
+    } else if (mg.error) {
+      console.warn('[init] 迁移未完成：', mg.error);
+    }
+  } catch (e) {
+    console.error('[init] 迁移异常，已跳过，应用继续启动', e);
+  }
+
   // 导航点击
   document.querySelectorAll('.nav-item').forEach(item => {
     item.addEventListener('click', (e) => {
