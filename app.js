@@ -2029,6 +2029,7 @@ modules['daily-todo'] = (c) => {
       <label>日期：</label>
       <input type="date" id="todoDate" value="${currentDate}">
       <button class="btn btn-outline btn-sm" onclick="copyYesterdayTodo()">复制昨天</button>
+      <button class="btn btn-outline btn-sm" onclick="clearTodo()">🗑 清空</button>
     </div>
     <div class="card">
       <div class="card-title">✅ 每日目标</div>
@@ -2102,6 +2103,15 @@ function delTodo(id) {
   data.items = data.items.filter(x => x.id !== id);
   Store.setByDate('todo', currentDate, data);
   renderTodoList(data.items);
+}
+
+function clearTodo() {
+  const data = Store.getByDate('todo', currentDate) || { items: [] };
+  if (!data.items.length) { toast('今日目标本来就是空的'); return; }
+  if (!confirm('确定清空今日目标？该操作不可恢复。')) return;
+  Store.setByDate('todo', currentDate, { items: [] });
+  renderTodoList([]);
+  toast('已清空今日目标');
 }
 
 function copyYesterdayTodo() {
