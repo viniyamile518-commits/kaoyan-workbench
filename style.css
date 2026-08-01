@@ -1021,6 +1021,90 @@ body {
   color: var(--primary);
 }
 
+/* 专家中心入口卡片 */
+.planner-expert-card {
+  background: linear-gradient(135deg, var(--primary-light), #fff);
+  border-color: var(--primary);
+}
+
+/* 粘贴识别结果 */
+.parse-group {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: var(--bg);
+}
+.parse-group-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.parse-count {
+  background: var(--primary);
+  color: #fff;
+  border-radius: 10px;
+  font-size: 11px;
+  padding: 1px 8px;
+  font-weight: 600;
+}
+.parse-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.parse-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+  padding: 4px 2px;
+}
+.parse-item input { margin-top: 3px; flex-shrink: 0; }
+
+/* 我的目标 */
+.goal-group { margin-bottom: 16px; }
+.goal-group-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.goal-items { display: flex; flex-direction: column; gap: 6px; }
+.goal-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 13px;
+}
+.goal-item.done .goal-text { text-decoration: line-through; color: var(--text-light); }
+.goal-text { flex: 1; line-height: 1.4; }
+.goal-empty { font-size: 12px; color: var(--text-light); padding: 6px 2px; }
+.phase-group { border-left: 3px solid var(--primary); padding-left: 12px; }
+.phase-del {
+  position: static;
+  margin-left: auto;
+  flex-shrink: 0;
+  background: transparent;
+  color: var(--text-light);
+  border: none;
+  font-size: 12px;
+  padding: 2px 6px;
+}
+.phase-del:hover { color: #dc2626; background: #fef2f2; border-radius: 6px; }
+
 /* ===== 导航子菜单 ===== */
 .nav-parent { cursor: pointer; }
 .nav-arrow {
