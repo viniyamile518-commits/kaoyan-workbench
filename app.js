@@ -448,11 +448,11 @@ const AI_PROVIDERS = {
     tip: '注册送额度，Qwen2.5-7B 等小模型永久免费。推荐新手首选。',
   },
   zhipu: {
-    name: '智谱 GLM（有免费模型）',
+    name: '智谱 GLM（推荐 · 有免费模型）',
     base: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
-    models: ['glm-4-flash', 'glm-4-air', 'glm-4-plus'],
-    keyUrl: 'https://bigmodel.cn/usercenter/apikeys',
-    tip: 'glm-4-flash 完全免费不限量，效果够用。',
+    models: ['glm-4-flash', 'glm-4.5-flash', 'glm-4.7-flash', 'glm-4-air', 'glm-4-plus'],
+    keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
+    tip: 'glm-4-flash 永久免费不限量（128K上下文）；glm-4.7-flash 也免费且更强（200K）。新用户另送2000万Token。',
   },
   deepseek: {
     name: 'DeepSeek（付费，最便宜）',
@@ -604,6 +604,38 @@ function openAISettings(onSaved) {
       API Key 只保存在你自己的浏览器里，不会上传到任何服务器。
     </div>
 
+    <details class="ai-guide" open>
+      <summary>🔰 第一次配置？点这里看 3 步教程（免费）</summary>
+      <div class="ai-guide-body">
+        <div class="ai-guide-step">
+          <span class="ai-guide-num">1</span>
+          <div>
+            <b>注册智谱账号</b>（手机号验证码，1分钟）<br>
+            <a href="https://open.bigmodel.cn/login" target="_blank">→ 打开注册页 open.bigmodel.cn</a>
+          </div>
+        </div>
+        <div class="ai-guide-step">
+          <span class="ai-guide-num">2</span>
+          <div>
+            <b>创建 API Key</b>：登录后进「API 密钥」页，点<b>「添加新的API Key」</b>，
+            再点复制按钮把它复制下来（形如 <code>xxxx.yyyy</code>）<br>
+            <a href="https://open.bigmodel.cn/usercenter/apikeys" target="_blank">→ 直达密钥页面</a>
+          </div>
+        </div>
+        <div class="ai-guide-step">
+          <span class="ai-guide-num">3</span>
+          <div>
+            <b>粘贴到下面的输入框</b>，点「🔌 测试连接」看到绿色 ✅ 就成功了，
+            最后点「确定」保存。
+          </div>
+        </div>
+        <div class="ai-guide-note">
+          💡 用 <b>glm-4-flash</b> 模型完全免费、不限量，不用充值也不用绑卡。
+          <button class="btn btn-outline btn-sm" id="aiQuickFill" style="margin-top:8px;">⚡ 一键填入推荐配置</button>
+        </div>
+      </div>
+    </details>
+
     <div style="margin-bottom:10px;">
       <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">服务商</label>
       <select class="select" id="aiProvider">${provOptions}</select>
@@ -666,6 +698,19 @@ function openAISettings(onSaved) {
   provSel.onchange = () => syncProvider(true);
   syncProvider(false);
 
+  // 一键填入推荐配置（智谱免费模型）
+  const quickFill = m.querySelector('#aiQuickFill');
+  if (quickFill) {
+    quickFill.onclick = () => {
+      provSel.value = 'zhipu';
+      syncProvider(false);
+      modelInput.value = 'glm-4-flash';
+      const keyInput = m.querySelector('#aiApiKey');
+      keyInput.focus();
+      toast(keyInput.value ? '已填入推荐配置' : '已填好服务商和模型，只差粘贴 API Key');
+    };
+  }
+
   m.querySelector('#aiTestBtn').onclick = async () => {
     const btn = m.querySelector('#aiTestBtn');
     const out = m.querySelector('#aiTestResult');
@@ -680,10 +725,21 @@ function openAISettings(onSaved) {
     out.style.color = 'var(--text-secondary)';
     try {
       const r = await AIEngine.test();
-      out.textContent = '✅ 连接成功：' + r.slice(0, 30);
+      out.innerHTML = '✅ <b>连接成功！</b>点「确定」保存即可开始用';
       out.style.color = '#16a34a';
     } catch (e) {
-      out.textContent = '❌ ' + e.message.slice(0, 120);
+      const raw = e.message || '';
+      let hint = raw.slice(0, 100);
+      if (/401|invalid.*key|鉴权|认证|apikey/i.test(raw)) {
+        hint = 'API Key 不对 —— 检查是否复制完整（智谱的 Key 中间有个点，要一起复制）';
+      } else if (/404|not found|model/i.test(raw)) {
+        hint = '模型名不对 —— 免费的填 glm-4-flash（注意是横杠不是下划线）';
+      } else if (/429|rate|quota|余额|欠费/i.test(raw)) {
+        hint = '请求太频繁或额度用尽 —— 稍等几秒再试，或换 glm-4-flash 免费模型';
+      } else if (/failed to fetch|networkerror|load failed/i.test(raw)) {
+        hint = '网络连不上 —— 检查网络，或关掉代理/VPN 再试（智谱是国内服务，不需要翻墙）';
+      }
+      out.innerHTML = '❌ ' + hint;
       out.style.color = '#dc2626';
     }
     btn.disabled = false;
