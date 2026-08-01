@@ -1604,3 +1604,18 @@ body {
   .planner-action-bar .btn { flex: 1 1 auto; font-size: 12px; }
   .chat-input-btns { flex-direction: row; }
 }
+
+/* 英语真题资料库（年份 × 题型 × 三套资料） */
+.eng-year-card { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--card-bg, #fff); }
+.eng-year { font-weight:700; font-size:14px; min-width:54px; }
+.eng-src-row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.eng-src { display:inline-flex; gap:2px; align-items:center; }
+.eng-src a.btn-sm { font-size:12px; text-decoration:none; }
+.eng-missing { font-size:12px; color:var(--text-light); }
+.eng-type-card { border:1px solid var(--border); border-radius:10px; padding:12px; background:var(--card-bg, #fff); }
+.eng-type-title { font-weight:700; font-size:14px; margin-bottom:4px; }
+.eng-type-hint { font-size:11px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5; }
+.eng-type-year { display:flex; align-items:center; gap:10px; padding:5px 0; border-top:1px dashed var(--border); }
+.eng-type-year-name { font-weight:600; font-size:13px; min-width:54px; }
+.btn-ghost { background:transparent; border:1px solid var(--border); color:var(--text-secondary); padding:2px 6px; }
+.btn-ghost:hover { background:var(--primary-light); border-color:var(--primary); }
