@@ -1732,6 +1732,38 @@ modules['study-planner'] = (c) => {
       <div style="font-size:11px;color:var(--text-light);margin-top:6px;">Enter 发送 · Shift+Enter 换行</div>
     </div>
 
+    <div class="card planner-expert-card">
+      <div class="card-title">🧠 WorkBuddy 专家中心 · 考试复习规划师</div>
+      <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;">
+        需要更系统的备考诊断？可前往 WorkBuddy 专家中心，与官方「考试复习规划师」专家对话，获取分科诊断与方案。
+      </p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="openExpertCenter()">🚀 前往专家中心</button>
+        <button class="btn btn-outline" onclick="copyExpertName()">📋 复制专家名</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-light);margin-top:8px;">
+        提示：在 WorkBuddy 左侧栏「专家」中搜索「考试复习规划师」即可进入对话。
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📥 粘贴文字 · 智能识别任务</div>
+      <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;">
+        把你的备考计划/安排粘贴到下面（可含<b>每日、每月、阶段/周</b>任务），系统自动识别并分类：
+      </p>
+      <textarea class="textarea" id="plannerPasteInput" placeholder="例如：&#10;【每日】&#10;- 背50个考研单词&#10;- 高数导数应用练习1小时&#10;【每月】&#10;- 完成数学二真题一套&#10;【阶段】基础阶段&#10;- 高数一轮复习&#10;- 线代知识点梳理" style="min-height:140px;"></textarea>
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button class="btn btn-primary" onclick="plannerParsePaste()">🔍 智能识别</button>
+        <button class="btn btn-outline" onclick="plannerClearPaste()">清空</button>
+      </div>
+      <div id="plannerParseResult" style="margin-top:12px;"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🎯 我的目标</div>
+      <div id="plannerMyGoals"></div>
+    </div>
+
     <div class="card">
       <div class="card-title">📋 规划历史</div>
       <div id="plannerHistory"></div>
@@ -1758,6 +1790,7 @@ modules['study-planner'] = (c) => {
   renderPlannerScene('plan');
   renderPlannerChat();
   renderPlannerHistory();
+  renderPlannerMyGoals();
 };
 
 // ===== 规划师对话状态 =====
@@ -2063,6 +2096,237 @@ function showExtractModal(tasks) {
     syncPlannerToTodo(picked);
     return true;
   });
+}
+
+// ===== WorkBuddy 专家中心入口 =====
+function openExpertCenter() {
+  window.open('https://www.workbuddy.cn/', '_blank');
+  toast('已在新标签页打开 WorkBuddy，请在左侧「专家」搜索「考试复习规划师」');
+}
+
+function copyExpertName() {
+  copyText('考试复习规划师');
+  toast('已复制专家名：考试复习规划师');
+}
+
+// ===== 粘贴文字智能识别任务 =====
+function plannerClearPaste() {
+  const el = document.getElementById('plannerPasteInput');
+  if (el) el.value = '';
+  const r = document.getElementById('plannerParseResult');
+  if (r) r.innerHTML = '';
+}
+
+function plannerParsePaste() {
+  const el = document.getElementById('plannerPasteInput');
+  if (!el) return;
+  const text = el.value.trim();
+  if (!text) { toast('请先粘贴文字'); return; }
+  const buckets = parsePlanText(text);
+  renderPlannerParseResult(buckets);
+}
+
+// 本地规则：按"小节标题"或行内关键词归类到 daily / monthly / phase
+function parsePlanText(text) {
+  const buckets = { daily: [], monthly: [], phase: [] };
+  let current = null; // 当前小节类别
+  const lines = text.split(/\r?\n/);
+  for (let raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    // 小节标题识别（被 【】 或 [] 包裹，或整行就是关键词）
+    const header = line.match(/^[【\[]?\s*(每日|每天|日计划|daily|day)\s*[\]】]?$/i)
+      || line.match(/^[【\[]?\s*(每月|月计划|monthly|month)\s*[\]】]?$/i)
+      || line.match(/^[【\[]?\s*(阶段|周计划|每周|weekly|phase|里程碑)\s*[\]】]?$/i);
+    if (header) {
+      const k = header[1];
+      if (/每日|每天|日计划|daily|day/i.test(k)) current = 'daily';
+      else if (/每月|月计划|monthly|month/i.test(k)) current = 'monthly';
+      else current = 'phase';
+      continue;
+    }
+
+    // 行内关键词（即使没有小节标题也能判断）
+    const inlineDaily = /(每日|每天)/.test(line);
+    const inlineMonthly = /(每月|月计划)/.test(line);
+    const inlinePhase = /(阶段|第[一二三四五六七八九十\d]+周|本周|下周|里程碑|phase)/.test(line);
+
+    // 任务行：列表项或纯短句
+    const taskMatch = line.match(/^(?:[-*]\s*(?:\[[ x]\]\s*)?|\d+[.、)]\s*)(.+)$/);
+    let taskText = null;
+    if (taskMatch) {
+      taskText = taskMatch[1].replace(/\*\*/g, '').replace(/`/g, '').trim();
+    } else if (line.length >= 4 && line.length <= 60 && !/[：:]$/.test(line)
+      && !/^(说明|注意|验证|总结|原则|如果|建议)/.test(line)) {
+      taskText = line.replace(/\*\*/g, '').trim();
+    }
+    if (!taskText || taskText.length < 2) continue;
+
+    let cat = current;
+    if (!cat) {
+      if (inlineDaily) cat = 'daily';
+      else if (inlineMonthly) cat = 'monthly';
+      else if (inlinePhase) cat = 'phase';
+      else cat = 'daily'; // 默认归每日
+    }
+    if (!buckets[cat].includes(taskText)) buckets[cat].push(taskText);
+  }
+  return buckets;
+}
+
+function renderPlannerParseResult(buckets) {
+  const box = document.getElementById('plannerParseResult');
+  if (!box) return;
+  const cats = [
+    { key: 'daily', label: '📅 每日任务', target: '今日目标' },
+    { key: 'monthly', label: '🗓 每月任务', target: '本月目标' },
+    { key: 'phase', label: '🚩 阶段/周任务', target: '阶段目标' },
+  ];
+  const total = buckets.daily.length + buckets.monthly.length + buckets.phase.length;
+  if (!total) {
+    box.innerHTML = '<div class="empty-state" style="padding:16px;"><div class="empty-state-text">未能识别到任务。请确认文字含「每日 / 每月 / 阶段」等关键词，或每行一条任务（用 - 或 1. 开头）。</div></div>';
+    return;
+  }
+  box.innerHTML = cats.map(cat => {
+    const items = buckets[cat.key];
+    if (!items.length) return '';
+    return `
+      <div class="parse-group">
+        <div class="parse-group-title">${cat.label} <span class="parse-count">${items.length}</span></div>
+        <div class="parse-items">
+          ${items.map((t) => `
+            <label class="parse-item">
+              <input type="checkbox" class="parse-cb" data-cat="${cat.key}" checked>
+              <span>${escapeHtml(t)}</span>
+            </label>`).join('')}
+        </div>
+        <button class="btn btn-sm btn-primary" onclick="plannerAddParsed('${cat.key}')">➕ 加入${cat.target}</button>
+      </div>`;
+  }).join('');
+  box.scrollIntoView({ behavior: 'smooth' });
+}
+
+function plannerAddParsed(cat) {
+  const box = document.getElementById('plannerParseResult');
+  if (!box) return;
+  const cbs = [...box.querySelectorAll(`.parse-cb[data-cat="${cat}"]`)].filter(cb => cb.checked);
+  if (!cbs.length) { toast('请至少勾选一条'); return; }
+  const texts = cbs.map(cb => cb.parentElement.querySelector('span').textContent.trim());
+  if (cat === 'daily') {
+    syncPlannerToTodo(texts);
+  } else if (cat === 'monthly') {
+    addMonthlyGoals(texts);
+  } else {
+    addPhaseGoal(texts);
+  }
+  renderPlannerMyGoals();
+  toast('已加入目标');
+}
+
+function monthKey() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+function addMonthlyGoals(texts) {
+  const data = Store.getByDate('monthly', monthKey()) || { items: [] };
+  texts.forEach(t => data.items.push({ id: uid(), text: t, done: false, source: 'paste' }));
+  Store.setByDate('monthly', monthKey(), data);
+}
+
+function addPhaseGoal(texts) {
+  const name = prompt('给这个阶段/周起个名字：', '新阶段目标');
+  if (name === null) return; // 取消
+  const phases = Store.get('phases', []);
+  phases.push({
+    id: uid(),
+    name: (name || '新阶段目标').trim(),
+    items: texts.map(t => ({ id: uid(), text: t, done: false })),
+  });
+  Store.set('phases', phases);
+}
+
+// ===== 我的目标展示 =====
+function renderPlannerMyGoals() {
+  const box = document.getElementById('plannerMyGoals');
+  if (!box) return;
+  const todoData = Store.getByDate('todo', currentDate) || { items: [] };
+  const monthlyData = Store.getByDate('monthly', monthKey()) || { items: [] };
+  const phases = Store.get('phases', []);
+
+  let html = renderGoalGroup(`📅 今日目标`, todoData.items, 'toggleTodo', 'delTodo');
+  html += renderGoalGroup(`🗓 本月目标 (${monthKey()})`, monthlyData.items, 'toggleMonthly', 'delMonthly');
+  if (phases.length) {
+    html += phases.map(p => renderPhaseGroup(p)).join('');
+  }
+  box.innerHTML = html;
+}
+
+function renderGoalGroup(title, items, toggleFn, delFn) {
+  return `
+    <div class="goal-group">
+      <div class="goal-group-title">${title} ${items.length ? `<span class="parse-count">${items.length}</span>` : ''}</div>
+      ${items.length ? `<div class="goal-items">` + items.map(it => `
+        <div class="goal-item ${it.done ? 'done' : ''}">
+          <div class="todo-checkbox ${it.done ? 'checked' : ''}" onclick="${toggleFn}('${it.id}')"></div>
+          <span class="goal-text">${escapeHtml(it.text)}</span>
+          <button class="todo-delete" onclick="${delFn}('${it.id}')">✕</button>
+        </div>`).join('') + `</div>` : '<div class="goal-empty">暂无</div>'}
+    </div>`;
+}
+
+function renderPhaseGroup(p) {
+  const done = p.items.filter(x => x.done).length;
+  return `
+    <div class="goal-group phase-group">
+      <div class="goal-group-title">
+        🚩 ${escapeHtml(p.name)} <span class="parse-count">${done}/${p.items.length}</span>
+        <button class="todo-delete phase-del" onclick="delPhase('${p.id}')">删阶段</button>
+      </div>
+      <div class="goal-items">
+        ${p.items.map(it => `
+          <div class="goal-item ${it.done ? 'done' : ''}">
+            <div class="todo-checkbox ${it.done ? 'checked' : ''}" onclick="togglePhase('${p.id}','${it.id}')"></div>
+            <span class="goal-text">${escapeHtml(it.text)}</span>
+            <button class="todo-delete" onclick="delPhaseItem('${p.id}','${it.id}')">✕</button>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+function toggleMonthly(id) {
+  const data = Store.getByDate('monthly', monthKey()) || { items: [] };
+  const it = data.items.find(x => x.id === id);
+  if (it) { it.done = !it.done; Store.setByDate('monthly', monthKey(), data); renderPlannerMyGoals(); }
+}
+
+function delMonthly(id) {
+  const data = Store.getByDate('monthly', monthKey()) || { items: [] };
+  data.items = data.items.filter(x => x.id !== id);
+  Store.setByDate('monthly', monthKey(), data);
+  renderPlannerMyGoals();
+}
+
+function togglePhase(pid, id) {
+  const ps = Store.get('phases', []);
+  const p = ps.find(x => x.id === pid);
+  if (p) {
+    const it = p.items.find(x => x.id === id);
+    if (it) { it.done = !it.done; Store.set('phases', ps); renderPlannerMyGoals(); }
+  }
+}
+
+function delPhaseItem(pid, id) {
+  const ps = Store.get('phases', []);
+  const p = ps.find(x => x.id === pid);
+  if (p) { p.items = p.items.filter(x => x.id !== id); Store.set('phases', ps); renderPlannerMyGoals(); }
+}
+
+function delPhase(pid) {
+  const ps = Store.get('phases', []);
+  Store.set('phases', ps.filter(x => x.id !== pid));
+  renderPlannerMyGoals();
 }
 
 const PLANNER_SCENES = {
