@@ -317,11 +317,14 @@ const CloudSync = {
   },
 
   // 收集本地所有 ky_ 数据
+  // 绝不上传到云端的敏感 key（含密钥/凭据）
+  SECRET_KEYS: ['ky_syncConfig', 'ky_aiConfig'],
+
   collectLocal() {
     const data = {};
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key.startsWith('ky_') && key !== 'ky_syncConfig') {
+      if (key.startsWith('ky_') && !this.SECRET_KEYS.includes(key)) {
         try { data[key] = JSON.parse(localStorage.getItem(key)); } catch {}
       }
     }
@@ -332,7 +335,7 @@ const CloudSync = {
   applyToLocal(cloudData) {
     if (!cloudData) return;
     for (const key in cloudData) {
-      if (key.startsWith('ky_')) {
+      if (key.startsWith('ky_') && !this.SECRET_KEYS.includes(key)) {
         localStorage.setItem(key, JSON.stringify(cloudData[key]));
       }
     }
@@ -435,40 +438,370 @@ function switchModule(name) {
 }
 
 // ===== AI 跳转 =====
-function aiJump(target, prompt) {
-  let url;
-  if (target === 'yuanbao') {
-    url = 'https://yuanbao.tencent.com/chat';
-  } else if (target === 'deepseek') {
-    url = 'https://chat.deepseek.com/';
-  }
-  // 把 prompt 写入剪贴板
-  navigator.clipboard.writeText(prompt).then(() => {
-    toast('Prompt 已复制，正在打开AI...');
-  }).catch(() => {
-    toast('正在打开AI，请手动粘贴Prompt');
+// ===== AI 引擎：OpenAI 兼容接口，浏览器直连，支持流式 =====
+const AI_PROVIDERS = {
+  siliconflow: {
+    name: '硅基流动（有免费模型）',
+    base: 'https://api.siliconflow.cn/v1/chat/completions',
+    models: ['Qwen/Qwen2.5-7B-Instruct', 'THUDM/glm-4-9b-chat', 'deepseek-ai/DeepSeek-V3'],
+    keyUrl: 'https://cloud.siliconflow.cn/account/ak',
+    tip: '注册送额度，Qwen2.5-7B 等小模型永久免费。推荐新手首选。',
+  },
+  zhipu: {
+    name: '智谱 GLM（有免费模型）',
+    base: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+    models: ['glm-4-flash', 'glm-4-air', 'glm-4-plus'],
+    keyUrl: 'https://bigmodel.cn/usercenter/apikeys',
+    tip: 'glm-4-flash 完全免费不限量，效果够用。',
+  },
+  deepseek: {
+    name: 'DeepSeek（付费，最便宜）',
+    base: 'https://api.deepseek.com/chat/completions',
+    models: ['deepseek-chat', 'deepseek-reasoner'],
+    keyUrl: 'https://platform.deepseek.com/api_keys',
+    tip: '约 ¥1/百万 token，规划一次不到 1 分钱，效果最好。',
+  },
+  moonshot: {
+    name: 'Kimi / Moonshot',
+    base: 'https://api.moonshot.cn/v1/chat/completions',
+    models: ['moonshot-v1-8k', 'moonshot-v1-32k'],
+    keyUrl: 'https://platform.moonshot.cn/console/api-keys',
+    tip: '注册送 ¥15 额度。',
+  },
+  custom: {
+    name: '自定义（OpenAI 兼容）',
+    base: '',
+    models: [],
+    keyUrl: '',
+    tip: '填写任意 OpenAI 兼容接口的完整 URL，如 https://xxx/v1/chat/completions',
+  },
+};
+
+const AIEngine = {
+  getConfig() {
+    return Store.get('aiConfig', {
+      provider: 'siliconflow',
+      apiKey: '',
+      model: 'Qwen/Qwen2.5-7B-Instruct',
+      customBase: '',
+    });
+  },
+  setConfig(cfg) {
+    Store.set('aiConfig', cfg);
+  },
+  isReady() {
+    const c = this.getConfig();
+    return !!(c.apiKey && c.model);
+  },
+  endpoint() {
+    const c = this.getConfig();
+    if (c.provider === 'custom') return c.customBase;
+    return AI_PROVIDERS[c.provider]?.base || '';
+  },
+
+  /**
+   * 流式对话
+   * @param {Array} messages [{role,content}]
+   * @param {Function} onDelta 每次收到增量文本时回调
+   * @param {AbortSignal} signal 中止信号
+   * @returns {Promise<string>} 完整回复
+   */
+  async chat(messages, onDelta, signal) {
+    const c = this.getConfig();
+    const url = this.endpoint();
+    if (!url) throw new Error('未配置 API 地址');
+    if (!c.apiKey) throw new Error('未配置 API Key');
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + c.apiKey,
+      },
+      body: JSON.stringify({
+        model: c.model,
+        messages,
+        stream: true,
+        temperature: 0.6,
+        max_tokens: 4000,
+      }),
+      signal,
+    });
+
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const err = await res.json();
+        msg += ' · ' + (err.error?.message || err.message || JSON.stringify(err).slice(0, 200));
+      } catch (e) {
+        try { msg += ' · ' + (await res.text()).slice(0, 200); } catch (e2) {}
+      }
+      if (res.status === 401) msg += '\n（API Key 无效，请到设置里检查）';
+      if (res.status === 429) msg += '\n（额度用尽或请求过快）';
+      throw new Error(msg);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let full = '';
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t || !t.startsWith('data:')) continue;
+        const data = t.slice(5).trim();
+        if (data === '[DONE]') continue;
+        try {
+          const json = JSON.parse(data);
+          const delta = json.choices?.[0]?.delta;
+          const piece = delta?.content || delta?.reasoning_content || '';
+          if (piece) {
+            full += piece;
+            if (onDelta) onDelta(piece, full);
+          }
+        } catch (e) { /* 忽略不完整分片 */ }
+      }
+    }
+    return full;
+  },
+
+  // 非流式测试连接
+  async test() {
+    const c = this.getConfig();
+    const url = this.endpoint();
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + c.apiKey },
+      body: JSON.stringify({ model: c.model, messages: [{ role: 'user', content: '回复"ok"两个字' }], max_tokens: 10 }),
+    });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { const e = await res.json(); msg += ' · ' + (e.error?.message || JSON.stringify(e).slice(0, 150)); } catch (x) {}
+      throw new Error(msg);
+    }
+    const j = await res.json();
+    return j.choices?.[0]?.message?.content || '(空回复)';
+  },
+};
+
+// ===== AI 设置面板 =====
+function openAISettings(onSaved) {
+  const cfg = AIEngine.getConfig();
+  const provOptions = Object.entries(AI_PROVIDERS)
+    .map(([k, v]) => `<option value="${k}" ${cfg.provider === k ? 'selected' : ''}>${v.name}</option>`)
+    .join('');
+
+  const m = modal('⚙️ AI 对话设置', `
+    <div style="font-size:12px;color:var(--text-secondary);line-height:1.7;margin-bottom:12px;background:#f0f7ff;padding:10px 12px;border-radius:8px;">
+      配置后，规划师就能<b>在工作台里直接和 AI 对话</b>，不用再跳转复制粘贴。<br>
+      API Key 只保存在你自己的浏览器里，不会上传到任何服务器。
+    </div>
+
+    <div style="margin-bottom:10px;">
+      <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">服务商</label>
+      <select class="select" id="aiProvider">${provOptions}</select>
+      <div id="aiProviderTip" style="font-size:12px;color:var(--text-secondary);margin-top:5px;line-height:1.5;"></div>
+    </div>
+
+    <div style="margin-bottom:10px;" id="aiCustomBaseWrap">
+      <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">接口地址</label>
+      <input class="input" id="aiCustomBase" value="${cfg.customBase || ''}" placeholder="https://xxx/v1/chat/completions">
+    </div>
+
+    <div style="margin-bottom:10px;">
+      <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">
+        API Key <a id="aiKeyLink" href="#" target="_blank" style="font-weight:400;font-size:12px;margin-left:6px;">去获取 →</a>
+      </label>
+      <input class="input" id="aiApiKey" type="password" value="${cfg.apiKey || ''}" placeholder="sk-...">
+    </div>
+
+    <div style="margin-bottom:10px;">
+      <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">模型</label>
+      <input class="input" id="aiModel" value="${cfg.model || ''}" list="aiModelList" placeholder="模型名称">
+      <datalist id="aiModelList"></datalist>
+    </div>
+
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn btn-outline btn-sm" id="aiTestBtn">🔌 测试连接</button>
+      <span id="aiTestResult" style="font-size:12px;"></span>
+    </div>
+  `, (mm) => {
+    const cfg2 = {
+      provider: mm.querySelector('#aiProvider').value,
+      apiKey: mm.querySelector('#aiApiKey').value.trim(),
+      model: mm.querySelector('#aiModel').value.trim(),
+      customBase: mm.querySelector('#aiCustomBase').value.trim(),
+    };
+    if (!cfg2.apiKey) { toast('请填写 API Key'); return false; }
+    if (!cfg2.model) { toast('请填写模型名称'); return false; }
+    AIEngine.setConfig(cfg2);
+    toast('AI 设置已保存');
+    if (onSaved) onSaved();
+    return true;
   });
-  window.open(url, '_blank');
+
+  const provSel = m.querySelector('#aiProvider');
+  const tipEl = m.querySelector('#aiProviderTip');
+  const keyLink = m.querySelector('#aiKeyLink');
+  const modelInput = m.querySelector('#aiModel');
+  const modelList = m.querySelector('#aiModelList');
+  const customWrap = m.querySelector('#aiCustomBaseWrap');
+
+  function syncProvider(resetModel) {
+    const p = AI_PROVIDERS[provSel.value];
+    tipEl.textContent = p.tip;
+    keyLink.href = p.keyUrl || '#';
+    keyLink.style.display = p.keyUrl ? 'inline' : 'none';
+    customWrap.style.display = provSel.value === 'custom' ? 'block' : 'none';
+    modelList.innerHTML = p.models.map(x => `<option value="${x}">`).join('');
+    if (resetModel && p.models.length) modelInput.value = p.models[0];
+  }
+  provSel.onchange = () => syncProvider(true);
+  syncProvider(false);
+
+  m.querySelector('#aiTestBtn').onclick = async () => {
+    const btn = m.querySelector('#aiTestBtn');
+    const out = m.querySelector('#aiTestResult');
+    AIEngine.setConfig({
+      provider: provSel.value,
+      apiKey: m.querySelector('#aiApiKey').value.trim(),
+      model: modelInput.value.trim(),
+      customBase: m.querySelector('#aiCustomBase').value.trim(),
+    });
+    btn.disabled = true;
+    out.textContent = '连接中...';
+    out.style.color = 'var(--text-secondary)';
+    try {
+      const r = await AIEngine.test();
+      out.textContent = '✅ 连接成功：' + r.slice(0, 30);
+      out.style.color = '#16a34a';
+    } catch (e) {
+      out.textContent = '❌ ' + e.message.slice(0, 120);
+      out.style.color = '#dc2626';
+    }
+    btn.disabled = false;
+  };
+
+  return m;
+}
+
+const AI_SITES = {
+  yuanbao: 'https://yuanbao.tencent.com/chat',
+  deepseek: 'https://chat.deepseek.com/',
+  doubao: 'https://www.doubao.com/chat/',
+  kimi: 'https://kimi.moonshot.cn/',
+};
+
+function aiJump(target, prompt) {
+  const url = AI_SITES[target] || AI_SITES.deepseek;
+  // 先复制再打开：新标签页会抢焦点导致 clipboard 写入失败，故同步写入
+  let copied = false;
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = prompt;
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;';
+    document.body.appendChild(ta);
+    ta.select();
+    copied = document.execCommand('copy');
+    document.body.removeChild(ta);
+  } catch (e) { copied = false; }
+
+  if (!copied && navigator.clipboard) {
+    navigator.clipboard.writeText(prompt).catch(() => {});
+  }
+  toast(copied ? 'Prompt 已复制，正在打开 AI...' : '正在打开 AI，请手动粘贴 Prompt');
+
+  const w = window.open(url, '_blank');
+  if (!w) toast('浏览器拦截了弹窗，请允许弹窗后重试');
+}
+
+// Prompt 注册表：避免把长文本内联进 HTML 属性（换行/引号会截断属性导致按钮失效）
+window.__aiPrompts = window.__aiPrompts || {};
+let __aiPromptSeq = 0;
+
+function registerPrompt(text) {
+  const key = 'p' + (++__aiPromptSeq);
+  window.__aiPrompts[key] = text;
+  return key;
+}
+
+function getPrompt(key) {
+  return window.__aiPrompts[key] || '';
+}
+
+function aiJumpKey(target, key) {
+  aiJump(target, getPrompt(key));
+}
+
+function copyPromptKey(key) {
+  const text = getPrompt(key);
+  copyText(text);
+}
+
+// 通用复制（带降级方案，http/非安全上下文下 clipboard API 不可用）
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text)
+      .then(() => toast('已复制到剪贴板'))
+      .catch(() => fallbackCopy(text));
+  } else {
+    fallbackCopy(text);
+  }
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px;top:0;';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
+    toast('已复制到剪贴板');
+  } catch (e) {
+    toast('复制失败，请手动选择文本复制');
+  }
+  document.body.removeChild(ta);
 }
 
 function aiPromptBox(title, desc, promptText) {
+  const key = registerPrompt(promptText);
   return `
     <div class="ai-prompt-box">
       <div class="ai-prompt-title">🤖 ${title}</div>
       <div class="ai-prompt-desc">${desc}</div>
       <div class="ai-prompt-actions">
-        <button class="btn btn-primary" onclick="aiJump('yuanbao', \`${promptText.replace(/`/g, '\\`')}\`)">
-          🟦 跳转腾讯元宝
-        </button>
-        <button class="btn btn-primary" onclick="aiJump('deepseek', \`${promptText.replace(/`/g, '\\`')}\`)">
-          🐋 跳转DeepSeek
-        </button>
-        <button class="btn btn-outline" onclick="navigator.clipboard.writeText(\`${promptText.replace(/`/g, '\\`')}\`).then(()=>toast('Prompt已复制'))">
-          📋 复制Prompt
-        </button>
+        <button class="btn btn-primary" onclick="aiJumpKey('yuanbao','${key}')">🟦 跳转腾讯元宝</button>
+        <button class="btn btn-primary" onclick="aiJumpKey('deepseek','${key}')">🐋 跳转DeepSeek</button>
+        <button class="btn btn-primary" onclick="aiJumpKey('doubao','${key}')">🌊 跳转豆包</button>
+        <button class="btn btn-outline" onclick="copyPromptKey('${key}')">📋 复制Prompt</button>
+        <button class="btn btn-outline" onclick="viewPromptKey('${key}')">👁 查看Prompt</button>
       </div>
     </div>
   `;
+}
+
+function viewPromptKey(key) {
+  const text = getPrompt(key);
+  const m = modal('Prompt 全文', `
+    <textarea class="textarea" readonly style="min-height:320px;font-size:12px;line-height:1.6;">${escapeHtml(text)}</textarea>
+    <p style="font-size:12px;color:var(--text-secondary);margin-top:8px;">可直接全选复制，粘贴到任意 AI 对话框。</p>
+  `, null, true);
+  const ta = m.querySelector('textarea');
+  if (ta) { ta.focus(); ta.select(); }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
 }
 
 // ===== 模块定义 =====
@@ -1288,14 +1621,28 @@ modules['study-planner'] = (c) => {
   const examDate = Store.get('examDate', '2026-12-21');
   const days = daysUntil(examDate);
   const target = Store.get('goalTarget', '');
+  const ready = AIEngine.isReady();
+  const cfg = AIEngine.getConfig();
 
   c.innerHTML = `
     <div class="card">
       <div class="card-title">🧠 复习规划师</div>
-      <p style="color:var(--text-secondary);margin-bottom:16px;font-size:13px;line-height:1.6;">
+      <p style="color:var(--text-secondary);margin-bottom:12px;font-size:13px;line-height:1.6;">
         基于 WorkBuddy「考试复习规划师」专家工作流，覆盖<b>规划→执行→复盘→修复→收口</b>全流程。
-        选择场景，填写信息后跳转 AI 生成方案，Prompt 自动复制到剪贴板。
       </p>
+
+      <div class="ai-status-bar ${ready ? 'ready' : 'notready'}">
+        <span class="ai-status-dot"></span>
+        <span class="ai-status-text">
+          ${ready
+            ? `AI 已连接 · ${AI_PROVIDERS[cfg.provider]?.name || cfg.provider} / ${cfg.model}`
+            : 'AI 未配置 —— 配置后可在工作台内直接对话规划，无需跳转'}
+        </span>
+        <button class="btn btn-outline btn-sm" onclick="openAISettings(()=>switchModule('study-planner'))">
+          ${ready ? '⚙️ 设置' : '🔑 立即配置'}
+        </button>
+      </div>
+
       <div class="planner-info-bar">
         <span class="planner-info-chip">📅 ${examDate}（${days}天）</span>
         ${target ? `<span class="planner-info-chip">🎯 ${target}</span>` : ''}
@@ -1309,6 +1656,26 @@ modules['study-planner'] = (c) => {
       </div>
       <div id="plannerScene"></div>
     </div>
+
+    <div class="card" id="plannerChatCard">
+      <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>💬 与规划师对话</span>
+        <span style="display:flex;gap:6px;">
+          <button class="btn btn-outline btn-sm" onclick="plannerExtractTasks()">📤 提取任务到今日目标</button>
+          <button class="btn btn-outline btn-sm" onclick="plannerClearChat()">🗑 清空对话</button>
+        </span>
+      </div>
+      <div class="chat-box" id="plannerChatBox"></div>
+      <div class="chat-input-row">
+        <textarea class="textarea" id="plannerChatInput" placeholder="填好上方表单后点「🚀 开始规划」，或在这里直接提问、追问修改..." rows="2"></textarea>
+        <div class="chat-input-btns">
+          <button class="btn btn-primary" id="plannerSendBtn" onclick="plannerSend()">发送</button>
+          <button class="btn btn-outline" id="plannerStopBtn" onclick="plannerStop()" style="display:none;">停止</button>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-light);margin-top:6px;">Enter 发送 · Shift+Enter 换行</div>
+    </div>
+
     <div class="card">
       <div class="card-title">📋 规划历史</div>
       <div id="plannerHistory"></div>
@@ -1319,13 +1686,328 @@ modules['study-planner'] = (c) => {
     tab.onclick = () => {
       document.querySelectorAll('.planner-tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
+      plannerCurrentScene = tab.dataset.scene;
       renderPlannerScene(tab.dataset.scene);
     };
   });
 
+  const input = document.getElementById('plannerChatInput');
+  if (input) {
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); plannerSend(); }
+    };
+  }
+
+  plannerCurrentScene = 'plan';
   renderPlannerScene('plan');
+  renderPlannerChat();
   renderPlannerHistory();
 };
+
+// ===== 规划师对话状态 =====
+let plannerCurrentScene = 'plan';
+let plannerAbortCtrl = null;
+
+const PLANNER_SYSTEM_PROMPT = `你是「考试复习规划师」，专门帮助考研学生把模糊的复习意图，变成可执行、可验证、可修复的具体计划。
+
+【你的核心原则】
+1. 计划必须落到"今天几点做什么、做多少、怎么算完成"，不能停留在"多练习""加强基础"这类空话。
+2. 任务必须带明确的量化交付物（如"高数第3章导数应用课后题 1-20 题，订正错题"），且单个任务不超过 90 分钟。
+3. 必须尊重用户给出的真实可用时间，不要排出一天 14 小时的理想计划。留 15%~20% 缓冲给突发情况。
+4. 先诊断再开方：如果关键信息缺失（可用时间、当前进度、薄弱点），先用一两个问题问清楚，不要凭空假设。
+5. 计划要有优先级：分数性价比高的、拖着不做会连锁崩盘的，排在前面。
+
+【输出格式要求】
+- 用简洁的 Markdown，避免冗长客套。
+- 给出"每日任务清单"时，每个任务单独一行，以 - 开头，格式为：\`- [科目] 具体任务 · 时长\`，方便用户一键导入待办。
+- 每次给出计划后，用一句话说明"如果今天只能完成一件事，那就是___"。
+- 最后附一个「验证标准」：怎么判断这一天/这一周的计划真的达成了。
+
+【语气】
+像一个见过很多考研学生、知道哪里会崩的靠谱学长。直接、务实、不灌鸡汤。`;
+
+function plannerChatKey() {
+  return 'plannerChat';
+}
+
+function getPlannerChat() {
+  return Store.get(plannerChatKey(), []);
+}
+
+function setPlannerChat(msgs) {
+  Store.set(plannerChatKey(), msgs);
+}
+
+function renderPlannerChat() {
+  const box = document.getElementById('plannerChatBox');
+  if (!box) return;
+  const msgs = getPlannerChat();
+  if (!msgs.length) {
+    box.innerHTML = `
+      <div class="chat-empty">
+        <div style="font-size:32px;margin-bottom:8px;">🧠</div>
+        <div style="font-size:13px;font-weight:600;margin-bottom:4px;">还没有开始对话</div>
+        <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">
+          在上方选择场景 → 填写信息 → 点「🚀 开始规划」<br>
+          规划师会实时生成方案，你可以继续追问、要求调整
+        </div>
+      </div>`;
+    return;
+  }
+  box.innerHTML = msgs.map((m, i) => `
+    <div class="chat-msg ${m.role}">
+      <div class="chat-avatar">${m.role === 'user' ? '🙋' : '🧠'}</div>
+      <div class="chat-bubble">
+        <div class="chat-content">${renderMarkdown(m.content)}</div>
+        ${m.role === 'assistant' ? `
+          <div class="chat-msg-actions">
+            <button onclick="plannerCopyMsg(${i})">📋 复制</button>
+            <button onclick="plannerExtractFrom(${i})">📤 提取任务</button>
+            <button onclick="plannerSaveMsg(${i})">💾 存为方案</button>
+          </div>` : ''}
+      </div>
+    </div>
+  `).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+// 轻量 Markdown 渲染（标题/加粗/列表/代码/表格分隔线）
+function renderMarkdown(text) {
+  let h = escapeHtml(text);
+  h = h.replace(/```([\s\S]*?)```/g, (m, code) => `<pre class="chat-pre">${code}</pre>`);
+  h = h.replace(/`([^`\n]+)`/g, '<code class="chat-code">$1</code>');
+  h = h.replace(/^###\s+(.+)$/gm, '<div class="md-h3">$1</div>');
+  h = h.replace(/^##\s+(.+)$/gm, '<div class="md-h2">$1</div>');
+  h = h.replace(/^#\s+(.+)$/gm, '<div class="md-h1">$1</div>');
+  h = h.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+  h = h.replace(/^\s*[-*]\s+(.+)$/gm, '<div class="md-li">• $1</div>');
+  h = h.replace(/^\s*(\d+)\.\s+(.+)$/gm, '<div class="md-li">$1. $2</div>');
+  h = h.replace(/^---+$/gm, '<hr class="md-hr">');
+  h = h.replace(/\n/g, '<br>');
+  h = h.replace(/(<\/div>)<br>/g, '$1');
+  h = h.replace(/(<hr class="md-hr">)<br>/g, '$1');
+  return h;
+}
+
+// 从当前场景表单生成首条消息并发送
+async function plannerStart() {
+  const config = PLANNER_SCENES[plannerCurrentScene];
+  if (!config) return;
+  const values = {};
+  config.fields.forEach(f => {
+    const el = document.getElementById(f.id);
+    if (el) values[f.id] = el.value.trim();
+  });
+  const prompt = config.build(values);
+
+  if (!AIEngine.isReady()) {
+    openAISettings(() => { switchModule('study-planner'); });
+    toast('请先配置 AI，配置后即可实时对话');
+    return;
+  }
+
+  // 新场景开始时清空历史，避免上下文混乱
+  setPlannerChat([]);
+  await plannerSendMessage(prompt);
+}
+
+function plannerSend() {
+  const input = document.getElementById('plannerChatInput');
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) { toast('请输入内容'); return; }
+  if (!AIEngine.isReady()) {
+    openAISettings(() => switchModule('study-planner'));
+    toast('请先配置 AI');
+    return;
+  }
+  input.value = '';
+  plannerSendMessage(text);
+}
+
+async function plannerSendMessage(userText) {
+  const msgs = getPlannerChat();
+  msgs.push({ role: 'user', content: userText });
+  setPlannerChat(msgs);
+  renderPlannerChat();
+
+  // 插入流式占位气泡
+  const box = document.getElementById('plannerChatBox');
+  const holder = document.createElement('div');
+  holder.className = 'chat-msg assistant';
+  holder.innerHTML = `
+    <div class="chat-avatar">🧠</div>
+    <div class="chat-bubble">
+      <div class="chat-content" id="plannerStreaming"><span class="chat-typing">规划师思考中<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span></div>
+    </div>`;
+  box.appendChild(holder);
+  box.scrollTop = box.scrollHeight;
+
+  const sendBtn = document.getElementById('plannerSendBtn');
+  const stopBtn = document.getElementById('plannerStopBtn');
+  if (sendBtn) sendBtn.disabled = true;
+  if (stopBtn) stopBtn.style.display = 'inline-block';
+
+  plannerAbortCtrl = new AbortController();
+  const streamEl = document.getElementById('plannerStreaming');
+  let firstChunk = true;
+
+  try {
+    const apiMsgs = [
+      { role: 'system', content: PLANNER_SYSTEM_PROMPT },
+      ...msgs.slice(-12).map(m => ({ role: m.role, content: m.content })),
+    ];
+
+    const full = await AIEngine.chat(apiMsgs, (piece, all) => {
+      if (firstChunk) { streamEl.innerHTML = ''; firstChunk = false; }
+      streamEl.innerHTML = renderMarkdown(all) + '<span class="chat-cursor"></span>';
+      box.scrollTop = box.scrollHeight;
+    }, plannerAbortCtrl.signal);
+
+    const msgs2 = getPlannerChat();
+    msgs2.push({ role: 'assistant', content: full || '(空回复)' });
+    setPlannerChat(msgs2);
+    renderPlannerChat();
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      const partial = streamEl?.textContent || '';
+      if (partial && !firstChunk) {
+        const msgs3 = getPlannerChat();
+        msgs3.push({ role: 'assistant', content: partial + '\n\n_（已手动停止）_' });
+        setPlannerChat(msgs3);
+      }
+      renderPlannerChat();
+      toast('已停止生成');
+    } else {
+      holder.remove();
+      const errBox = document.createElement('div');
+      errBox.className = 'chat-msg assistant';
+      errBox.innerHTML = `
+        <div class="chat-avatar">⚠️</div>
+        <div class="chat-bubble" style="background:#fef2f2;border-color:#fecaca;">
+          <div class="chat-content" style="color:#dc2626;font-size:13px;">
+            <b>调用失败</b><br>${escapeHtml(e.message)}
+            <div style="margin-top:8px;">
+              <button class="btn btn-outline btn-sm" onclick="openAISettings(()=>switchModule('study-planner'))">⚙️ 检查设置</button>
+            </div>
+          </div>
+        </div>`;
+      box.appendChild(errBox);
+      box.scrollTop = box.scrollHeight;
+    }
+  } finally {
+    plannerAbortCtrl = null;
+    if (sendBtn) sendBtn.disabled = false;
+    if (stopBtn) stopBtn.style.display = 'none';
+  }
+}
+
+function plannerStop() {
+  if (plannerAbortCtrl) plannerAbortCtrl.abort();
+}
+
+function plannerClearChat() {
+  if (!confirm('确定清空当前对话？规划历史不受影响。')) return;
+  setPlannerChat([]);
+  renderPlannerChat();
+  toast('对话已清空');
+}
+
+function plannerCopyMsg(i) {
+  const msgs = getPlannerChat();
+  if (msgs[i]) copyText(msgs[i].content);
+}
+
+function plannerSaveMsg(i) {
+  const msgs = getPlannerChat();
+  if (!msgs[i]) return;
+  const history = Store.get('plannerHistory', []);
+  history.unshift({
+    id: uid(),
+    scene: plannerCurrentScene,
+    title: (PLANNER_SCENES[plannerCurrentScene]?.title || '规划') + '（AI方案）',
+    prompt: msgs[i].content.slice(0, 400),
+    full: msgs[i].content,
+    time: Date.now(),
+  });
+  if (history.length > 30) history.length = 30;
+  Store.set('plannerHistory', history);
+  toast('已保存到规划历史');
+  renderPlannerHistory();
+}
+
+// 从 AI 回复中自动抽取任务行
+function extractTaskLines(text) {
+  const lines = text.split('\n');
+  const tasks = [];
+  for (let raw of lines) {
+    let l = raw.trim();
+    if (!l) continue;
+    // 匹配 "- xxx" / "* xxx" / "1. xxx" / "- [ ] xxx"
+    const m = l.match(/^(?:[-*]\s*(?:\[[ x]\]\s*)?|\d+[.、)]\s*)(.+)$/);
+    if (!m) continue;
+    let t = m[1].trim();
+    t = t.replace(/\*\*/g, '').replace(/`/g, '').trim();
+    if (t.length < 4 || t.length > 80) continue;
+    // 过滤掉像标题、说明性的行
+    if (/^(验证标准|如果今天|说明|注意|备注|总结|原则)/.test(t)) continue;
+    if (t.endsWith('：') || t.endsWith(':')) continue;
+    tasks.push(t);
+  }
+  return tasks;
+}
+
+function plannerExtractFrom(i) {
+  const msgs = getPlannerChat();
+  if (!msgs[i]) return;
+  showExtractModal(extractTaskLines(msgs[i].content));
+}
+
+function plannerExtractTasks() {
+  const msgs = getPlannerChat();
+  const lastAI = [...msgs].reverse().find(m => m.role === 'assistant');
+  if (!lastAI) { toast('还没有 AI 回复'); return; }
+  showExtractModal(extractTaskLines(lastAI.content));
+}
+
+function showExtractModal(tasks) {
+  if (!tasks.length) {
+    modal('提取任务', `
+      <p style="font-size:13px;color:var(--text-secondary);margin-bottom:10px;">
+        没有自动识别到任务行。你可以手动粘贴要导入的任务（每行一个）：
+      </p>
+      <textarea class="textarea" id="syncTodoText" placeholder="高数极限计算练习 30min&#10;背50个考研单词" style="min-height:160px;"></textarea>
+    `, (m) => {
+      const text = m.querySelector('#syncTodoText').value.trim();
+      const list = text.split('\n').map(t => t.trim()).filter(Boolean);
+      if (!list.length) { toast('请输入任务'); return false; }
+      syncPlannerToTodo(list);
+      return true;
+    });
+    return;
+  }
+
+  modal('📤 提取任务到今日目标', `
+    <p style="font-size:12px;color:var(--text-secondary);margin-bottom:10px;">
+      自动识别到 <b>${tasks.length}</b> 条任务，取消勾选不需要的，确定后加入今日目标：
+    </p>
+    <div style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px;">
+      ${tasks.map((t, i) => `
+        <label style="display:flex;align-items:flex-start;gap:8px;padding:6px 4px;font-size:13px;line-height:1.5;cursor:pointer;">
+          <input type="checkbox" class="extract-cb" data-idx="${i}" checked style="margin-top:3px;flex-shrink:0;">
+          <span>${escapeHtml(t)}</span>
+        </label>
+      `).join('')}
+    </div>
+  `, (m) => {
+    const picked = [...m.querySelectorAll('.extract-cb')]
+      .filter(cb => cb.checked)
+      .map(cb => tasks[+cb.dataset.idx]);
+    if (!picked.length) { toast('请至少勾选一条'); return false; }
+    syncPlannerToTodo(picked);
+    return true;
+  });
+}
 
 const PLANNER_SCENES = {
   plan: {
@@ -1654,11 +2336,14 @@ function renderPlannerScene(scene) {
       <span style="font-size:12px;color:var(--text-secondary);margin-left:8px;">${config.desc}</span>
     </div>
     ${fieldsHtml}
-    <div id="plannerPromptBox"></div>
-    <div style="display:flex;gap:8px;margin-top:12px;">
-      <button class="btn btn-outline" onclick="savePlannerHistory('${scene}')">💾 保存方案</button>
-      <button class="btn btn-primary" onclick="openPlannerSync()">📤 同步到今日目标</button>
+
+    <div class="planner-action-bar">
+      <button class="btn btn-primary planner-go-btn" onclick="plannerStart()">🚀 开始规划（AI 实时对话）</button>
+      <button class="btn btn-outline" onclick="togglePlannerPrompt()" id="plannerPromptToggle">🔗 改用跳转外部 AI</button>
+      <button class="btn btn-outline" onclick="openPlannerSync()">📤 手动同步到今日目标</button>
     </div>
+
+    <div id="plannerPromptBox" style="display:none;"></div>
   `;
 
   config.fields.forEach(f => {
@@ -1682,9 +2367,18 @@ function updatePlannerPrompt(scene) {
   if (!el) return;
   el.innerHTML = aiPromptBox(
     config.title,
-    '填写完毕后点击下方按钮跳转 AI，Prompt 将自动复制到剪贴板。',
+    '点击跳转按钮时，Prompt 会自动复制到剪贴板，到对方网站粘贴发送即可。若复制失败可点「查看 Prompt」手动复制。',
     prompt
   );
+}
+
+function togglePlannerPrompt() {
+  const box = document.getElementById('plannerPromptBox');
+  const btn = document.getElementById('plannerPromptToggle');
+  if (!box) return;
+  const show = box.style.display === 'none';
+  box.style.display = show ? 'block' : 'none';
+  if (btn) btn.textContent = show ? '🔽 收起跳转选项' : '🔗 改用跳转外部 AI';
 }
 
 function savePlannerHistory(scene) {
@@ -1732,15 +2426,40 @@ function renderPlannerHistory() {
     el.innerHTML = '<div class="empty-state"><div class="empty-state-text">暂无规划历史。生成方案后可点击"保存方案"记录。</div></div>';
     return;
   }
-  el.innerHTML = history.map(h => `
+  el.innerHTML = history.map((h, i) => `
     <div class="planner-history-item">
-      <div style="display:flex;align-items:center;margin-bottom:6px;">
+      <div style="display:flex;align-items:center;margin-bottom:6px;gap:8px;flex-wrap:wrap;">
         <span style="font-weight:700;font-size:13px;">${PLANNER_SCENES[h.scene]?.icon || '📋'} ${h.title}</span>
         <span class="ph-tag tag tag-blue">${fmtDate(h.time)}</span>
+        <span style="margin-left:auto;display:flex;gap:6px;">
+          ${h.full ? `<button class="btn btn-outline btn-sm" onclick="viewPlannerHistory(${i})">👁 查看全文</button>` : ''}
+          ${h.full ? `<button class="btn btn-outline btn-sm" onclick="reuseePlannerHistory(${i})">📤 提取任务</button>` : ''}
+          <button class="btn btn-outline btn-sm" style="color:#dc2626;" onclick="delPlannerHistory(${i})">删除</button>
+        </span>
       </div>
-      <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;">${h.prompt}</div>
+      <div style="font-size:12px;color:var(--text-secondary);line-height:1.6;max-height:80px;overflow:hidden;">${escapeHtml(h.prompt || '')}</div>
     </div>
   `).join('');
+}
+
+function viewPlannerHistory(i) {
+  const h = Store.get('plannerHistory', [])[i];
+  if (!h) return;
+  modal(h.title, `<div class="chat-content" style="max-height:60vh;overflow-y:auto;font-size:13px;line-height:1.7;">${renderMarkdown(h.full || h.prompt || '')}</div>`, null, true);
+}
+
+function reuseePlannerHistory(i) {
+  const h = Store.get('plannerHistory', [])[i];
+  if (!h) return;
+  showExtractModal(extractTaskLines(h.full || h.prompt || ''));
+}
+
+function delPlannerHistory(i) {
+  const list = Store.get('plannerHistory', []);
+  list.splice(i, 1);
+  Store.set('plannerHistory', list);
+  renderPlannerHistory();
+  toast('已删除');
 }
 
 // ===== 数学模块 =====
@@ -4527,12 +5246,19 @@ function init() {
   // 云端同步
   document.getElementById('syncBtn').addEventListener('click', openSyncPanel);
 
+  // AI 设置
+  const aiBtn = document.getElementById('aiSettingsBtn');
+  if (aiBtn) aiBtn.addEventListener('click', () => openAISettings(() => {
+    if (currentModule === 'study-planner') switchModule('study-planner');
+  }));
+
   // 导出
   document.getElementById('exportBtn').addEventListener('click', () => {
     const data = {};
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key.startsWith('ky_')) {
+      // 排除含密钥的配置，避免备份文件外泄导致凭据泄露
+      if (key.startsWith('ky_') && !['ky_syncConfig', 'ky_aiConfig'].includes(key)) {
         data[key] = JSON.parse(localStorage.getItem(key));
       }
     }
