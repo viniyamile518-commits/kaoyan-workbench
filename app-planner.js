@@ -1252,7 +1252,7 @@ modules['eng-sentence'] = (c) => {
       <div id="xbbTheory" style="display:none;max-height:380px;overflow:auto;font-size:13px;line-height:1.95;white-space:pre-wrap;color:var(--text);">${escapeHtml(THEORY)}</div>
     </div>
     <div class="card">
-      <div class="card-title">📖 颉斌斌66句 · 每日滚动学习</div>
+      <div class="card-title">📖 颉斌斌66句 · 每日滚动学习 <span style="font-size:11px;color:#94a3b8;font-weight:400;margin-left:6px;">${window.__XBB66_VERSION__ || 'fallback'}</span></div>
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
         <div style="flex:1;">
           <div class="kp-progress-bar">
