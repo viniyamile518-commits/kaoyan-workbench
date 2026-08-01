@@ -1735,15 +1735,15 @@ modules['study-planner'] = (c) => {
     <div class="card planner-expert-card">
       <div class="card-title">🧠 WorkBuddy 专家中心 · 考试复习规划师</div>
       <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;">
-        需要更系统的备考诊断？可直接唤起本机已安装的 WorkBuddy 桌面应用，进入官方「考试复习规划师」专家对话。
+        点「🚀 唤起」会直接拉起你本机已安装的 WorkBuddy 桌面应用，并尝试自动切换到「考试复习规划师」专家开聊（已自动复制专家名作保底）。
       </p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-primary" onclick="openExpertCenter()">🚀 唤起桌面应用</button>
-        <button class="btn btn-outline" onclick="openExpertWeb()">🌐 网页版</button>
+        <button class="btn btn-primary" onclick="openExpertCenter()">🚀 唤起并用专家对话</button>
         <button class="btn btn-outline" onclick="copyExpertName()">📋 复制专家名</button>
+        <button class="btn btn-outline" onclick="openExpertWeb()">🌐 网页版</button>
       </div>
       <div style="font-size:11px;color:var(--text-light);margin-top:8px;">
-        首次使用需在本机 WorkBuddy 桌面端「Claw设置 → 协议注册」中启用 <b>workbuddy://</b> 协议；之后点此按钮即可直接拉起应用。
+        手动保底：WorkBuddy 左侧点「专家」→ 搜索框粘贴「考试复习规划师」→ 点「立即召唤」。首次需在桌面端「Claw设置 → 协议注册」启用 <b>workbuddy://</b>。
       </div>
     </div>
 
@@ -2102,19 +2102,23 @@ function showExtractModal(tasks) {
 // ===== WorkBuddy 专家中心入口 =====
 // 优先尝试用 workbuddy:// 自定义协议直接唤起本地桌面应用并打开专家；
 // 若协议未注册/未启用，则回退打开网页版。
+// WorkBuddy 官方协议仅有 workbuddy://command?text=xxx（text 需 URL 编码），
+// 没有"直接打开指定专家"的文档化深链。把专家名写进任务指令，让应用收到后
+// 有最大概率自行切换到该专家并开聊；同时自动复制专家名作为手动保底。
 function openExpertCenter() {
-  const cmd = encodeURIComponent('打开专家中心，搜索并进入「考试复习规划师」专家');
-  const deepLink = `workbuddy://command?text=${cmd}`;
-  toast('正在尝试唤起 WorkBuddy 桌面应用…');
+  const task = '请在专家中心切换到「考试复习规划师」专家，并基于我的考研备考情况（数学二 + 英语 + 政治 + 专业课 GIS/RS/GPS），帮我制定一份分阶段复习规划。';
+  const deepLink = `workbuddy://command?text=${encodeURIComponent(task)}`;
+  copyText('考试复习规划师'); // 保底：复制专家名，方便手动搜索
+  toast('正在唤起 WorkBuddy 桌面应用…（已自动复制专家名）');
   try {
     const a = document.createElement('a');
     a.href = deepLink;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    // 协议唤起后通常已切走；2.5s 后若仍在页面，提示回退方案
+    // 协议唤起后通常已切走；2.5s 后提示手动保底路径
     setTimeout(() => {
-      toast('若桌面应用未自动弹出：请在桌面端「Claw设置 → 协议注册」启用 workbuddy://，或点「🌐 网页版」');
+      toast('若未自动进入专家：在 WorkBuddy 左侧点「专家」→ 搜索框粘贴「考试复习规划师」→ 点「立即召唤」');
     }, 2500);
   } catch (e) {
     window.open('https://www.workbuddy.cn/', '_blank');
