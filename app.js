@@ -1681,71 +1681,6 @@ modules['study-planner'] = (c) => {
   const cfg = AIEngine.getConfig();
 
   c.innerHTML = `
-    <div class="card">
-      <div class="card-title">🧠 复习规划师</div>
-      <p style="color:var(--text-secondary);margin-bottom:12px;font-size:13px;line-height:1.6;">
-        基于 WorkBuddy「考试复习规划师」专家工作流，覆盖<b>规划→执行→复盘→修复→收口</b>全流程。
-      </p>
-
-      <div class="ai-status-bar ${ready ? 'ready' : 'notready'}">
-        <span class="ai-status-dot"></span>
-        <span class="ai-status-text">
-          ${ready
-            ? `AI 已连接 · ${AI_PROVIDERS[cfg.provider]?.name || cfg.provider} / ${cfg.model}`
-            : 'AI 未配置 —— 配置后可在工作台内直接对话规划，无需跳转'}
-        </span>
-        <button class="btn btn-outline btn-sm" onclick="openAISettings(()=>switchModule('study-planner'))">
-          ${ready ? '⚙️ 设置' : '🔑 立即配置'}
-        </button>
-      </div>
-
-      <div class="planner-info-bar">
-        <span class="planner-info-chip">📅 ${examDate}（${days}天）</span>
-        ${target ? `<span class="planner-info-chip">🎯 ${target}</span>` : ''}
-      </div>
-      <div class="planner-tabs" id="plannerTabs">
-        <button class="planner-tab active" data-scene="plan">📋 初次规划</button>
-        <button class="planner-tab" data-scene="today">✅ 今日任务</button>
-        <button class="planner-tab" data-scene="review">🔄 每日复盘</button>
-        <button class="planner-tab" data-scene="fix">🔧 计划修复</button>
-        <button class="planner-tab" data-scene="final">🎯 考前收口</button>
-      </div>
-      <div id="plannerScene"></div>
-    </div>
-
-    <div class="card" id="plannerChatCard">
-      <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
-        <span>💬 与规划师对话</span>
-        <span style="display:flex;gap:6px;">
-          <button class="btn btn-outline btn-sm" onclick="plannerExtractTasks()">📤 提取任务到今日目标</button>
-          <button class="btn btn-outline btn-sm" onclick="plannerClearChat()">🗑 清空对话</button>
-        </span>
-      </div>
-      <div class="chat-box" id="plannerChatBox"></div>
-      <div class="chat-input-row">
-        <textarea class="textarea" id="plannerChatInput" placeholder="填好上方表单后点「🚀 开始规划」，或在这里直接提问、追问修改..." rows="2"></textarea>
-        <div class="chat-input-btns">
-          <button class="btn btn-primary" id="plannerSendBtn" onclick="plannerSend()">发送</button>
-          <button class="btn btn-outline" id="plannerStopBtn" onclick="plannerStop()" style="display:none;">停止</button>
-        </div>
-      </div>
-      <div style="font-size:11px;color:var(--text-light);margin-top:6px;">Enter 发送 · Shift+Enter 换行</div>
-    </div>
-
-    <div class="card planner-expert-card">
-      <div class="card-title">📋 考研学习计划 · 共享模板</div>
-      <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;">
-        这是一份 WorkBuddy 共享的「制定考研学习计划」提示词模板，点下方按钮即可在 WorkBuddy（桌面端/网页版）中直接打开并基于你的备考情况生成计划。
-      </p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <button class="btn btn-primary" onclick="openStudyPlanTemplate()">🚀 打开规划模板</button>
-        <button class="btn btn-outline" onclick="copyText('https://workbuddy.link/p/QSkX48VX06swlfW6zLakY6?ext2=copy_link')">🔗 复制链接</button>
-      </div>
-      <div style="font-size:11px;color:var(--text-light);margin-top:8px;">
-        若已安装 WorkBuddy 桌面端，点击会直接唤起应用并预填该规划模板；未安装则在浏览器打开网页版。
-      </div>
-    </div>
-
     <div class="card planner-expert-card">
       <div class="card-title">🧠 WorkBuddy 专家中心 · 考试复习规划师</div>
       <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;">
@@ -1777,6 +1712,81 @@ modules['study-planner'] = (c) => {
     <div class="card">
       <div class="card-title">🎯 我的目标</div>
       <div id="plannerMyGoals"></div>
+    </div>
+
+    <div class="card planner-expert-card">
+      <div class="card-title">📋 考研学习计划 · 共享模板</div>
+      <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;">
+        这是一份 WorkBuddy 共享的「制定考研学习计划」提示词模板，点下方按钮即可在 WorkBuddy（桌面端/网页版）中直接打开并基于你的备考情况生成计划。
+      </p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="openStudyPlanTemplate()">🚀 打开规划模板</button>
+        <button class="btn btn-outline" onclick="copyText('https://workbuddy.link/p/QSkX48VX06swlfW6zLakY6?ext2=copy_link')">🔗 复制链接</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-light);margin-top:8px;">
+        若已安装 WorkBuddy 桌面端，点击会直接唤起应用并预填该规划模板；未安装则在浏览器打开网页版。
+      </div>
+    </div>
+
+    <div class="planner-collapse">
+      <div class="planner-collapse-head" onclick="togglePlannerCollapse()">
+        <span>🧠 复习规划师 · 规划对话区（点击展开）</span>
+        <span class="planner-collapse-icon" id="plannerCollapseIcon">▸</span>
+      </div>
+      <div class="planner-collapse-body" id="plannerCollapseBody" style="display:none;">
+
+        <div class="card">
+          <div class="card-title">🧠 复习规划师</div>
+          <p style="color:var(--text-secondary);margin-bottom:12px;font-size:13px;line-height:1.6;">
+            基于 WorkBuddy「考试复习规划师」专家工作流，覆盖<b>规划→执行→复盘→修复→收口</b>全流程。
+          </p>
+
+          <div class="ai-status-bar ${ready ? 'ready' : 'notready'}">
+            <span class="ai-status-dot"></span>
+            <span class="ai-status-text">
+              ${ready
+                ? `AI 已连接 · ${AI_PROVIDERS[cfg.provider]?.name || cfg.provider} / ${cfg.model}`
+                : 'AI 未配置 —— 配置后可在工作台内直接对话规划，无需跳转'}
+            </span>
+            <button class="btn btn-outline btn-sm" onclick="openAISettings(()=>switchModule('study-planner'))">
+              ${ready ? '⚙️ 设置' : '🔑 立即配置'}
+            </button>
+          </div>
+
+          <div class="planner-info-bar">
+            <span class="planner-info-chip">📅 ${examDate}（${days}天）</span>
+            ${target ? `<span class="planner-info-chip">🎯 ${target}</span>` : ''}
+          </div>
+          <div class="planner-tabs" id="plannerTabs">
+            <button class="planner-tab active" data-scene="plan">📋 初次规划</button>
+            <button class="planner-tab" data-scene="today">✅ 今日任务</button>
+            <button class="planner-tab" data-scene="review">🔄 每日复盘</button>
+            <button class="planner-tab" data-scene="fix">🔧 计划修复</button>
+            <button class="planner-tab" data-scene="final">🎯 考前收口</button>
+          </div>
+          <div id="plannerScene"></div>
+        </div>
+
+        <div class="card" id="plannerChatCard">
+          <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>💬 与规划师对话</span>
+            <span style="display:flex;gap:6px;">
+              <button class="btn btn-outline btn-sm" onclick="plannerExtractTasks()">📤 提取任务到今日目标</button>
+              <button class="btn btn-outline btn-sm" onclick="plannerClearChat()">🗑 清空对话</button>
+            </span>
+          </div>
+          <div class="chat-box" id="plannerChatBox"></div>
+          <div class="chat-input-row">
+            <textarea class="textarea" id="plannerChatInput" placeholder="填好上方表单后点「🚀 开始规划」，或在这里直接提问、追问修改..." rows="2"></textarea>
+            <div class="chat-input-btns">
+              <button class="btn btn-primary" id="plannerSendBtn" onclick="plannerSend()">发送</button>
+              <button class="btn btn-outline" id="plannerStopBtn" onclick="plannerStop()" style="display:none;">停止</button>
+            </div>
+          </div>
+          <div style="font-size:11px;color:var(--text-light);margin-top:6px;">Enter 发送 · Shift+Enter 换行</div>
+        </div>
+
+      </div>
     </div>
 
     <div class="card">
@@ -2155,6 +2165,16 @@ function openStudyPlanTemplate() {
   const url = 'https://workbuddy.link/p/QSkX48VX06swlfW6zLakY6?ext2=copy_link';
   toast('正在打开「制定考研学习计划」共享模板…');
   window.open(url, '_blank');
+}
+
+// 折叠/展开「复习规划师」规划对话区
+function togglePlannerCollapse() {
+  const body = document.getElementById('plannerCollapseBody');
+  if (!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  const icon = document.getElementById('plannerCollapseIcon');
+  if (icon) icon.textContent = open ? '▸' : '▾';
 }
 
 // ===== 粘贴文字智能识别任务 =====
