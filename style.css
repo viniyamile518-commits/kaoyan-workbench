@@ -1312,3 +1312,106 @@ body {
 .sentence-xbb-label { font-size: 12px; font-weight: 700; color: var(--text-secondary); margin-bottom: 4px; }
 .sentence-xbb-content { font-size: 13px; line-height: 1.7; }
 .sentence-xbb-btns { display: flex; gap: 6px; margin-top: 10px; }
+
+/* ===== AI 状态栏 ===== */
+.ai-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 14px;
+  font-size: 13px;
+  border: 1px solid;
+}
+.ai-status-bar.ready { background: #f0fdf4; border-color: #bbf7d0; }
+.ai-status-bar.notready { background: #fffbeb; border-color: #fde68a; }
+.ai-status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.ai-status-bar.ready .ai-status-dot { background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,.15); }
+.ai-status-bar.notready .ai-status-dot { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.15); }
+.ai-status-text { flex: 1; line-height: 1.5; }
+.ai-status-bar.ready .ai-status-text { color: #15803d; }
+.ai-status-bar.notready .ai-status-text { color: #b45309; }
+
+/* ===== 规划师操作栏 ===== */
+.planner-action-bar { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.planner-go-btn { font-weight: 700; }
+
+/* ===== 对话界面 ===== */
+.chat-box {
+  min-height: 200px;
+  max-height: 520px;
+  overflow-y: auto;
+  padding: 14px;
+  background: #fafbfc;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 10px;
+}
+.chat-empty { text-align: center; padding: 40px 20px; color: var(--text-secondary); }
+.chat-msg { display: flex; gap: 10px; margin-bottom: 16px; align-items: flex-start; }
+.chat-msg.user { flex-direction: row-reverse; }
+.chat-avatar {
+  width: 30px; height: 30px; border-radius: 50%;
+  background: #fff; border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; flex-shrink: 0;
+}
+.chat-bubble {
+  max-width: 82%;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 14px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.04);
+}
+.chat-msg.user .chat-bubble { background: #eff6ff; border-color: #bfdbfe; }
+.chat-content { font-size: 13px; line-height: 1.75; color: var(--text); word-break: break-word; }
+.chat-content .md-h1 { font-size: 16px; font-weight: 800; margin: 10px 0 6px; }
+.chat-content .md-h2 { font-size: 15px; font-weight: 700; margin: 10px 0 5px; color: var(--primary); }
+.chat-content .md-h3 { font-size: 13.5px; font-weight: 700; margin: 8px 0 4px; }
+.chat-content .md-li { padding-left: 4px; margin: 3px 0; }
+.chat-content .md-hr { border: none; border-top: 1px dashed var(--border); margin: 10px 0; }
+.chat-content .chat-code {
+  background: #f1f5f9; padding: 1px 5px; border-radius: 4px;
+  font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+}
+.chat-content .chat-pre {
+  background: #f8fafc; border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px; overflow-x: auto; font-size: 12px; line-height: 1.6; margin: 8px 0;
+  font-family: ui-monospace, Consolas, monospace; white-space: pre-wrap;
+}
+.chat-msg-actions {
+  display: flex; gap: 6px; margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--border); flex-wrap: wrap;
+}
+.chat-msg-actions button {
+  font-size: 11px; padding: 3px 9px; border-radius: 6px;
+  border: 1px solid var(--border); background: #fff; cursor: pointer;
+  color: var(--text-secondary);
+}
+.chat-msg-actions button:hover { background: var(--hover); color: var(--primary); }
+
+.chat-cursor {
+  display: inline-block; width: 7px; height: 14px;
+  background: var(--primary); vertical-align: text-bottom;
+  animation: chatBlink .9s steps(2) infinite; margin-left: 2px;
+}
+@keyframes chatBlink { 0%,100%{opacity:1} 50%{opacity:0} }
+.chat-typing { color: var(--text-secondary); font-size: 13px; }
+.chat-typing .dot { animation: chatDot 1.4s infinite; }
+.chat-typing .dot:nth-child(2) { animation-delay: .2s; }
+.chat-typing .dot:nth-child(3) { animation-delay: .4s; }
+@keyframes chatDot { 0%,60%,100%{opacity:.2} 30%{opacity:1} }
+
+.chat-input-row { display: flex; gap: 8px; align-items: flex-end; }
+.chat-input-row .textarea { flex: 1; min-height: 56px; resize: vertical; font-size: 13px; }
+.chat-input-btns { display: flex; flex-direction: column; gap: 6px; }
+.chat-input-btns .btn { white-space: nowrap; }
+
+@media (max-width: 768px) {
+  .chat-bubble { max-width: 88%; }
+  .chat-box { max-height: 420px; }
+  .planner-action-bar .btn { flex: 1 1 auto; font-size: 12px; }
+  .chat-input-btns { flex-direction: row; }
+}
