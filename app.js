@@ -588,17 +588,36 @@ const TimerBus = {
    */
   set(name, fn, ms) {
     this.clear(name);
-    this._h[name] = setInterval(fn, ms);
+    this._h[name] = { id: setInterval(fn, ms), once: false };
     return name;
   },
 
   /**
-   * 清除指定定时器
+   * 注册一次性延时任务（同样纳入作用域管理，可被 clearScope 统一回收）
+   * @param {string} name 形如 'global:markjiUndo'
+   * @param {() => void} fn
+   * @param {number} ms
+   * @returns {string} name
+   */
+  once(name, fn, ms) {
+    this.clear(name);
+    const self = this;
+    this._h[name] = {
+      id: setTimeout(() => { delete self._h[name]; fn(); }, ms),
+      once: true
+    };
+    return name;
+  },
+
+  /**
+   * 清除指定定时器（自动区分 interval / timeout）
    * @param {string} name
    */
   clear(name) {
-    if (this._h[name]) {
-      clearInterval(this._h[name]);
+    const h = this._h[name];
+    if (h) {
+      if (h.once) clearTimeout(h.id);
+      else clearInterval(h.id);
       delete this._h[name];
     }
   },
