@@ -1747,6 +1747,20 @@ modules['study-planner'] = (c) => {
       </div>
     </div>
 
+    <div class="card planner-expert-card">
+      <div class="card-title">📋 考研学习计划 · 共享模板</div>
+      <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;">
+        这是一份 WorkBuddy 共享的「制定考研学习计划」提示词模板，点下方按钮即可在 WorkBuddy（桌面端/网页版）中直接打开并基于你的备考情况生成计划。
+      </p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="openStudyPlanTemplate()">🚀 打开规划模板</button>
+        <button class="btn btn-outline" onclick="copyText('https://workbuddy.link/p/QSkX48VX06swlfW6zLakY6?ext2=copy_link')">🔗 复制链接</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-light);margin-top:8px;">
+        若已安装 WorkBuddy 桌面端，点击会直接唤起应用并预填该规划模板；未安装则在浏览器打开网页版。
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-title">📥 粘贴文字 · 智能识别任务</div>
       <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:10px;">
@@ -2133,6 +2147,14 @@ function openExpertWeb() {
 function copyExpertName() {
   copyText('考试复习规划师');
   toast('已复制专家名：考试复习规划师');
+}
+
+// 打开 WorkBuddy 共享的「制定考研学习计划」提示词模板
+// workbuddy.link/p/... 是共享 prompt，点击后由 workbuddy.link 负责唤起桌面应用或打开网页版
+function openStudyPlanTemplate() {
+  const url = 'https://workbuddy.link/p/QSkX48VX06swlfW6zLakY6?ext2=copy_link';
+  toast('正在打开「制定考研学习计划」共享模板…');
+  window.open(url, '_blank');
 }
 
 // ===== 粘贴文字智能识别任务 =====
