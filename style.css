@@ -1121,8 +1121,10 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   height: 100%;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 .dash-pomo-time {
   font-size: 48px;
@@ -1131,6 +1133,22 @@ body {
   font-variant-numeric: tabular-nums;
 }
 .dash-pomo-mode { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
+.dash-pomo-settings {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+.dash-pomo-input {
+  width: 46px;
+  text-align: center;
+  padding: 3px 4px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
 .dash-pomo-controls { display: flex; gap: 6px; margin-top: 10px; }
 .dash-pomo-controls button {
   padding: 6px 14px;
@@ -1143,6 +1161,31 @@ body {
 }
 .dash-pomo-controls button:hover { background: var(--hover); }
 .dash-pomo-task { font-size: 12px; color: var(--text-secondary); margin-top: 6px; }
+.dash-pomo-stat {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 10px;
+  text-align: center;
+}
+.dash-pomo-history { width: 100%; margin-top: 6px; flex: 1; }
+.dash-pomo-history-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 5px;
+  font-size: 11px;
+}
+.dash-pomo-history-item .t {
+  font-weight: 600;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dash-pomo-history-item .m { color: var(--text-light); flex-shrink: 0; }
 
 /* ===== 网课分组 ===== */
 .course-group {
