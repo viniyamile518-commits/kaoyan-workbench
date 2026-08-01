@@ -42,7 +42,13 @@ modules['study-planner'] = (c) => {
     </div>
 
     <div class="card">
-      <div class="card-title">🎯 我的目标</div>
+      <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>🎯 我的目标</span>
+        <span style="display:flex;gap:6px;">
+          <button class="btn btn-outline btn-sm" onclick="plannerClearTodayGoals()">🗑 清空今日</button>
+          <button class="btn btn-outline btn-sm" onclick="plannerClearAllGoals()">🧹 清空全部</button>
+        </span>
+      </div>
       <div id="plannerMyGoals"></div>
     </div>
 
@@ -655,18 +661,19 @@ function renderPlannerMyGoals() {
   const monthlyData = Store.getByDate('monthly', monthKey()) || { items: [] };
   const phases = Store.get('phases', []);
 
-  let html = renderGoalGroup(`📅 今日目标`, todoData.items, 'toggleTodo', 'delTodo');
-  html += renderGoalGroup(`🗓 本月目标 (${monthKey()})`, monthlyData.items, 'toggleMonthly', 'delMonthly');
+  let html = renderGoalGroup(`📅 今日目标`, todoData.items, 'toggleTodo', 'delTodo', 'plannerClearTodayGoals');
+  html += renderGoalGroup(`🗓 本月目标 (${monthKey()})`, monthlyData.items, 'toggleMonthly', 'delMonthly', 'plannerClearMonthly');
   if (phases.length) {
     html += phases.map(p => renderPhaseGroup(p)).join('');
   }
   box.innerHTML = html;
 }
 
-function renderGoalGroup(title, items, toggleFn, delFn) {
+function renderGoalGroup(title, items, toggleFn, delFn, clearFn) {
+  const clearBtn = clearFn ? `<button class="goal-clear" onclick="${clearFn}()">清空</button>` : '';
   return `
     <div class="goal-group">
-      <div class="goal-group-title">${title} ${items.length ? `<span class="parse-count">${items.length}</span>` : ''}</div>
+      <div class="goal-group-title">${title} ${items.length ? `<span class="parse-count">${items.length}</span>` : ''} ${clearBtn}</div>
       ${items.length ? `<div class="goal-items">` + items.map(it => `
         <div class="goal-item ${it.done ? 'done' : ''}">
           <div class="todo-checkbox ${it.done ? 'checked' : ''}" onclick="${toggleFn}('${it.id}')"></div>
@@ -727,6 +734,44 @@ function delPhase(pid) {
   const ps = Store.get('phases', []);
   Store.set('phases', ps.filter(x => x.id !== pid));
   renderPlannerMyGoals();
+}
+
+// 一键清空：今日目标
+function plannerClearTodayGoals() {
+  const data = Store.getByDate('todo', currentDate) || { items: [] };
+  if (!data.items.length) { toast('今日目标本来就是空的'); return; }
+  if (!confirm('确定清空「今日目标」？该操作不可恢复。')) return;
+  Store.setByDate('todo', currentDate, { items: [] });
+  renderPlannerMyGoals();
+  if (typeof renderTodoList === 'function' && document.getElementById('todoList')) renderTodoList([]);
+  toast('已清空今日目标');
+}
+
+// 一键清空：本月目标
+function plannerClearMonthly() {
+  const data = Store.getByDate('monthly', monthKey()) || { items: [] };
+  if (!data.items.length) { toast('本月目标本来就是空的'); return; }
+  if (!confirm('确定清空「本月目标」？该操作不可恢复。')) return;
+  Store.setByDate('monthly', monthKey(), { items: [] });
+  renderPlannerMyGoals();
+  toast('已清空本月目标');
+}
+
+// 一键清空：我的目标（今日+本月+阶段）
+function plannerClearAllGoals() {
+  const todo = Store.getByDate('todo', currentDate) || { items: [] };
+  const monthly = Store.getByDate('monthly', monthKey()) || { items: [] };
+  const phases = Store.get('phases', []);
+  if (!todo.items.length && !monthly.items.length && !phases.length) {
+    toast('目标本来就是空的'); return;
+  }
+  if (!confirm('确定清空全部目标（今日+本月+阶段）？该操作不可恢复。')) return;
+  Store.setByDate('todo', currentDate, { items: [] });
+  Store.setByDate('monthly', monthKey(), { items: [] });
+  Store.set('phases', []);
+  renderPlannerMyGoals();
+  if (typeof renderTodoList === 'function' && document.getElementById('todoList')) renderTodoList([]);
+  toast('已清空全部目标');
 }
 
 const PLANNER_SCENES = {
