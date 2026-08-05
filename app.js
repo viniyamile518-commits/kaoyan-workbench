@@ -3064,8 +3064,23 @@ const PRACTICE_4Q = [
   { key: 'q4', label: '举一反三', desc: '把数字换一组，还能做出来' }
 ];
 
+const PRACTICE_SCORE_COLORS = { 4: '#27ae60', 3: '#f39c12', 2: '#f39c12', 1: '#e74c3c', 0: '#e74c3c' };
+const PRACTICE_SCORE_LABELS = { 4: '完全掌握', 3: '基本掌握', 2: '半生不熟', 1: '未掌握', 0: '未掌握' };
+
+// 当前正在内联编辑的练习记录 id（null 表示无）
+let editingPracticeId = null;
+
+// 把 4 问得分映射到掌握程度筛选桶
+function practiceMasteryBucket(score) {
+  if (score === 4) return 'pass4';
+  if (score === 3) return 'pass3';
+  if (score === 2) return 'pass2';
+  return 'pass01';
+}
+
 modules['math-practice'] = (c) => {
   const today = new Date().toISOString().slice(0, 10);
+  editingPracticeId = null; // 进入模块时清掉上次的编辑态
   const records = Store.get('practiceLog', []);
 
   c.innerHTML = `
@@ -3142,9 +3157,9 @@ modules['math-practice'] = (c) => {
     </div>
 
     <div class="card">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <div class="card-title" style="margin:0;">📖 练习历史</div>
-        <select class="select" id="practiceFilter" style="width:120px;font-size:12px;" onchange="renderPracticeLog()">
+      <div class="card-title" style="margin:0 0 12px;">📖 练习历史</div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+        <select class="select" id="practiceFilter" style="width:108px;font-size:12px;" onchange="renderPracticeLog()" title="按来源筛选">
           <option value="all">全部来源</option>
           <option value="题库">题库</option>
           <option value="课本例题">课本例题</option>
@@ -3153,6 +3168,17 @@ modules['math-practice'] = (c) => {
           <option value="真题">真题</option>
           <option value="其他">其他</option>
         </select>
+        <select class="select" id="practiceMastery" style="width:130px;font-size:12px;" onchange="renderPracticeLog()" title="按掌握程度筛选">
+          <option value="all">全部掌握度</option>
+          <option value="pass4">完全掌握(4/4)</option>
+          <option value="pass3">基本掌握(3/4)</option>
+          <option value="pass2">半生不熟(2/4)</option>
+          <option value="pass01">未掌握(0-1/4)</option>
+        </select>
+        <input class="input" id="practiceFrom" type="date" style="width:140px;font-size:12px;" onchange="renderPracticeLog()" title="起始日期">
+        <span style="font-size:12px;color:var(--text-light);">至</span>
+        <input class="input" id="practiceTo" type="date" style="width:140px;font-size:12px;" onchange="renderPracticeLog()" title="结束日期">
+        <button class="btn btn-outline btn-sm" style="font-size:11px;" onclick="resetPracticeFilters()">重置筛选</button>
       </div>
       <div id="practiceList"></div>
     </div>
@@ -3210,11 +3236,26 @@ function renderPracticeLog() {
   const el = document.getElementById('practiceList');
   if (!el) return;
 
-  const filterEl = document.getElementById('practiceFilter');
-  const filter = filterEl ? filterEl.value : 'all';
-  const filtered = filter === 'all' ? records : records.filter(r => r.source === filter);
+  // 读取四个筛选维度（来源 / 掌握程度 / 起止日期），缺省容错
+  const fSource = document.getElementById('practiceFilter');
+  const fMastery = document.getElementById('practiceMastery');
+  const fFrom = document.getElementById('practiceFrom');
+  const fTo = document.getElementById('practiceTo');
+  const source = fSource ? fSource.value : 'all';
+  const mastery = fMastery ? fMastery.value : 'all';
+  const from = fFrom ? fFrom.value : '';
+  const to = fTo ? fTo.value : '';
 
-  // update stats
+  const filtered = records.filter(r => {
+    const score = (r.q1?1:0) + (r.q2?1:0) + (r.q3?1:0) + (r.q4?1:0);
+    if (source !== 'all' && r.source !== source) return false;
+    if (mastery !== 'all' && practiceMasteryBucket(score) !== mastery) return false;
+    if (from && r.date < from) return false;
+    if (to && r.date > to) return false;
+    return true;
+  });
+
+  // 统计（随筛选实时变化）
   const statTotal = document.getElementById('statTotal');
   const statPass = document.getElementById('statPass');
   const statHalf = document.getElementById('statHalf');
@@ -3234,43 +3275,148 @@ function renderPracticeLog() {
   }
 
   if (!filtered.length) {
-    el.innerHTML = '<div class="empty-state"><div class="empty-state-text">还没有练习记录，做完一道题来记录吧~</div></div>';
+    el.innerHTML = '<div class="empty-state"><div class="empty-state-text">没有符合条件的练习记录~</div></div>';
     return;
   }
 
   const sorted = [...filtered].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
-  const scoreColors = { 4: '#27ae60', 3: '#f39c12', 2: '#f39c12', 1: '#e74c3c', 0: '#e74c3c' };
-  const scoreLabels = { 4: '完全掌握', 3: '基本掌握', 2: '半生不熟', 1: '未掌握', 0: '未掌握' };
 
   el.innerHTML = sorted.map(r => {
+    if (r.id === editingPracticeId) return renderPracticeEditRow(r);
     const score = (r.q1?1:0) + (r.q2?1:0) + (r.q3?1:0) + (r.q4?1:0);
-    const color = scoreColors[score];
-    const label = scoreLabels[score];
-    return `
-      <div class="todo-item" style="flex-wrap:wrap;gap:6px;">
-        <div style="flex:1;min-width:200px;">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-            <span style="font-size:12px;color:var(--text-light);">${r.date}</span>
-            <span class="tag tag-blue" style="font-size:11px;">${r.source}</span>
-            <span style="font-size:14px;font-weight:600;">${r.ref}</span>
-          </div>
-          ${r.content ? `<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">${r.content}</div>` : ''}
-          <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
-            ${PRACTICE_4Q.map((q, i) => {
-              const checked = r['q' + (i+1)];
-              return `<span style="font-size:11px;padding:2px 8px;border-radius:4px;${checked ? 'background:#27ae60;color:#fff;' : 'background:var(--bg-secondary);color:var(--text-light);text-decoration:line-through;'}">Q${i+1} ${q.label}</span>`;
-            }).join('')}
-          </div>
-          ${r.note ? `<div style="font-size:12px;color:var(--text-secondary);margin-top:6px;font-style:italic;">📝 ${r.note}</div>` : ''}
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-          <span style="font-size:12px;font-weight:700;padding:3px 10px;border-radius:12px;background:${color}22;color:${color};">${score}/4 ${label}</span>
-          ${score < 4 ? `<button class="btn btn-outline btn-sm" style="font-size:11px;" onclick="retryPractice('${r.id}')">🔁 重做</button>` : ''}
-          <button class="todo-delete" onclick="delPractice('${r.id}')">✕</button>
-        </div>
-      </div>
-    `;
+    return renderPracticeViewRow(r, score);
   }).join('');
+
+  // 编辑行渲染后给 4 问勾选标签上色
+  if (editingPracticeId) {
+    PRACTICE_4Q.forEach((_, i) => updateEditQLabel(i + 1));
+  }
+}
+
+// 练习历史 —— 普通展示行
+function renderPracticeViewRow(r, score) {
+  const color = PRACTICE_SCORE_COLORS[score];
+  const label = PRACTICE_SCORE_LABELS[score];
+  const retryTag = r.retryOf ? `<span class="tag tag-orange" style="font-size:11px;">↻ 第${(r.attempt||1)}次重做</span>` : '';
+  return `
+    <div class="todo-item" style="flex-wrap:wrap;gap:6px;">
+      <div style="flex:1;min-width:200px;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:12px;color:var(--text-light);">${r.date}</span>
+          <span class="tag tag-blue" style="font-size:11px;">${escapeHtml(r.source)}</span>
+          ${retryTag}
+          <span style="font-size:14px;font-weight:600;">${escapeHtml(r.ref)}</span>
+        </div>
+        ${r.content ? `<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">${escapeHtml(r.content)}</div>` : ''}
+        <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
+          ${PRACTICE_4Q.map((q, i) => {
+            const checked = r['q' + (i+1)];
+            return `<span style="font-size:11px;padding:2px 8px;border-radius:4px;${checked ? 'background:#27ae60;color:#fff;' : 'background:var(--bg-secondary);color:var(--text-light);text-decoration:line-through;'}">Q${i+1} ${q.label}</span>`;
+          }).join('')}
+        </div>
+        ${r.note ? `<div style="font-size:12px;color:var(--text-secondary);margin-top:6px;font-style:italic;">📝 ${escapeHtml(r.note)}</div>` : ''}
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;">
+        <span style="font-size:12px;font-weight:700;padding:3px 10px;border-radius:12px;background:${color}22;color:${color};">${score}/4 ${label}</span>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;" onclick="editPractice('${r.id}')">✏️ 编辑</button>
+        ${score < 4 ? `<button class="btn btn-outline btn-sm" style="font-size:11px;" onclick="retryPractice('${r.id}')">🔁 重做</button>` : ''}
+        <button class="todo-delete" onclick="delPractice('${r.id}')">✕</button>
+      </div>
+    </div>`;
+}
+
+// 练习历史 —— 内联编辑行
+function renderPracticeEditRow(r) {
+  const score = (r.q1?1:0) + (r.q2?1:0) + (r.q3?1:0) + (r.q4?1:0);
+  const color = PRACTICE_SCORE_COLORS[score];
+  const label = PRACTICE_SCORE_LABELS[score];
+  const sources = ['题库','课本例题','课后题','1000题','真题','其他'];
+  return `
+    <div class="todo-item" style="flex-wrap:wrap;gap:8px;background:var(--bg-secondary);border:1px solid var(--accent);">
+      <div style="flex:1;min-width:240px;">
+        <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+          <input class="input" id="editDate" type="date" value="${r.date}" style="width:130px;font-size:12px;">
+          <select class="select" id="editSource" style="width:110px;font-size:12px;">
+            ${sources.map(s => `<option value="${s}" ${r.source===s?'selected':''}>${s}</option>`).join('')}
+          </select>
+          <input class="input" id="editRef" value="${escapeHtml(r.ref)}" placeholder="题目标识" style="flex:1;min-width:160px;font-size:12px;">
+        </div>
+        <input class="input" id="editContent" value="${escapeHtml(r.content||'')}" placeholder="题目简述（可选）" style="width:100%;font-size:12px;margin-bottom:8px;">
+        <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center;">
+          <span style="font-size:12px;font-weight:600;color:var(--text-secondary);">4问达标：</span>
+          ${PRACTICE_4Q.map((q, i) => `
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;padding:4px 10px;border:1px solid var(--border);border-radius:6px;" id="editQLabel${i+1}">
+              <input type="checkbox" id="editQ${i+1}" ${r['q'+(i+1)]?'checked':''} onchange="updateEditQLabel(${i+1})" style="width:16px;height:16px;cursor:pointer;">
+              <span>Q${i+1} ${q.label}</span>
+            </label>
+          `).join('')}
+        </div>
+        <textarea class="textarea" id="editNote" placeholder="备注（卡在哪、下次怎么改）" rows="2" style="width:100%;font-size:12px;">${escapeHtml(r.note||'')}</textarea>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0;justify-content:flex-start;">
+        <span style="font-size:12px;font-weight:700;padding:3px 10px;border-radius:12px;background:${color}22;color:${color};text-align:center;">${score}/4 ${label}</span>
+        <button class="btn btn-primary btn-sm" style="font-size:11px;" onclick="savePracticeEdit('${r.id}')">💾 保存</button>
+        <button class="btn btn-outline btn-sm" style="font-size:11px;" onclick="cancelPracticeEdit()">取消</button>
+        <button class="todo-delete" onclick="delPractice('${r.id}')">✕</button>
+      </div>
+    </div>`;
+}
+
+function updateEditQLabel(idx) {
+  const cb = document.getElementById('editQ' + idx);
+  const label = document.getElementById('editQLabel' + idx);
+  if (!cb || !label) return;
+  if (cb.checked) {
+    label.style.background = 'var(--accent)';
+    label.style.color = '#fff';
+    label.style.borderColor = 'var(--accent)';
+  } else {
+    label.style.background = '';
+    label.style.color = '';
+    label.style.borderColor = 'var(--border)';
+  }
+}
+
+function editPractice(id) {
+  editingPracticeId = id;
+  renderPracticeLog();
+}
+
+function cancelPracticeEdit() {
+  editingPracticeId = null;
+  renderPracticeLog();
+}
+
+function savePracticeEdit(id) {
+  const records = Store.get('practiceLog', []);
+  const idx = records.findIndex(r => r.id === id);
+  if (idx < 0) { editingPracticeId = null; return; }
+  const date = document.getElementById('editDate').value;
+  const source = document.getElementById('editSource').value;
+  const ref = document.getElementById('editRef').value.trim();
+  const content = document.getElementById('editContent').value.trim();
+  const note = document.getElementById('editNote').value.trim();
+  if (!ref) { toast('请填写题目标识'); return; }
+  records[idx] = {
+    ...records[idx],
+    date, source, ref, content, note,
+    q1: document.getElementById('editQ1').checked,
+    q2: document.getElementById('editQ2').checked,
+    q3: document.getElementById('editQ3').checked,
+    q4: document.getElementById('editQ4').checked
+  };
+  Store.set('practiceLog', records);
+  editingPracticeId = null;
+  renderPracticeLog();
+  toast('已保存');
+}
+
+function resetPracticeFilters() {
+  const a = document.getElementById('practiceFilter'); if (a) a.value = 'all';
+  const b = document.getElementById('practiceMastery'); if (b) b.value = 'all';
+  const c = document.getElementById('practiceFrom'); if (c) c.value = '';
+  const d = document.getElementById('practiceTo'); if (d) d.value = '';
+  renderPracticeLog();
 }
 
 function delPractice(id) {
@@ -3283,18 +3429,24 @@ function retryPractice(id) {
   const records = Store.get('practiceLog', []);
   const old = records.find(r => r.id === id);
   if (!old) return;
-  // create a new record today, same question, reset 4Q
+  // 新开一条重做记录（今日），归到同一条原始题，4问重置为未达标
+  const newId = uid();
+  const attempt = (old.retryOf ? (old.attempt || 1) : 0) + 1;
   Store.push('practiceLog', {
-    id: uid(),
+    id: newId,
     date: new Date().toISOString().slice(0, 10),
     source: old.source,
     ref: old.ref,
     content: old.content,
-    note: '重做记录',
-    q1: false, q2: false, q3: false, q4: false
+    note: '',
+    q1: false, q2: false, q3: false, q4: false,
+    retryOf: old.retryOf || old.id,
+    attempt
   });
+  // 直接进编辑态，方便立刻勾本次重做的4问 + 写备注
+  editingPracticeId = newId;
   renderPracticeLog();
-  toast('已添加重做记录，完成后更新4问');
+  toast('已开重做记录，勾好4问后点保存');
 }
 
 function togglePracticeRefInput() {
