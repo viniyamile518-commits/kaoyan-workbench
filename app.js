@@ -411,6 +411,18 @@ function modal(title, contentHTML, onConfirm, hideActions) {
   return m;
 }
 
+// 数学题图放大查看（图片版做题本）
+function openMathImgModal(src, caption) {
+  const safeCaption = String(caption||'').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
+  const html = `
+    <div style="text-align:center;">
+      <img src="${src}" alt="${safeCaption}" style="max-width:92vw;max-height:78vh;height:auto;border-radius:6px;background:#fff;display:block;margin:0 auto;" />
+      <div style="margin-top:10px;font-size:13px;color:var(--text-secondary);">${safeCaption}</div>
+    </div>
+  `;
+  modal('题目图片 · ' + safeCaption, html, null, true);
+}
+
 function el(tag, cls, html) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -2721,14 +2733,19 @@ function renderMathBankList() {
           <div style="flex:1;min-width:0;">
             <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;">
               <span class="tag tag-blue">${typeName(q.type)}</span>
-              <span class="tag tag-green">${q.year}年</span>
-              <span class="tag tag-purple">第${q.qnum}题</span>
-              <span class="tag tag-green">${q.book === '真题' ? q.year + '年' : (q.book || q.year)}</span>
+              ${q.book === '真题' ? `<span class="tag tag-green">${q.year}年</span>` : `<span class="tag tag-green">${q.book}</span>`}
+              <span class="tag tag-purple">${q.book === '真题' ? '第' + q.qnum + '题' : '例 ' + q.qnum}</span>
               ${q.chapter ? `<span class="tag tag-orange" style="background:#fff3e0;color:#e65100;">${q.chapter}</span>` : ''}
-              ${q.knowledgePoint ? `<span class="tag tag-gray">${q.knowledgePoint}</span>` : ''}
+              ${q.knowledgePoint && q.knowledgePoint !== q.chapter ? `<span class="tag tag-gray">${q.knowledgePoint}</span>` : ''}
               ${(!hasAnswer || !hasExplanation) ? `<span class="tag tag-gray" style="background:#ffebee;color:#c62828;">答案/解析待补</span>` : ''}
             </div>
-            <div class="math-content" style="font-size:14px;line-height:1.8;">${q.content}</div>
+            ${(q.book === '30讲' || q.book === '1000题')
+              ? `<div class="math-img-wrap" style="margin:4px 0;">
+                   <img src="${q.content}" alt="${q.book} ${q.qnum}" loading="lazy"
+                        style="max-width:100%;height:auto;border-radius:6px;border:1px solid var(--border);background:#fff;cursor:zoom-in;display:block;"
+                        onclick="openMathImgModal('${q.content}','${q.book} ${q.qnum}')" />
+                 </div>`
+              : `<div class="math-content" style="font-size:14px;line-height:1.8;">${q.content}</div>`}
             ${q.options && q.options.length ? `
               <div style="margin-top:6px;font-size:13px;color:var(--text-secondary);">
                 ${q.options.map(o => `<div>${o}</div>`).join('')}
