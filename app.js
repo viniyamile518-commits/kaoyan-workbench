@@ -2549,7 +2549,7 @@ modules['math-exam'] = (c) => {
 
 // ===== 数学题库（按年份/题型/章节/知识点筛选）=====
 let _mathBank = [];
-let _mathBankFilter = { year: 'all', type: 'all', point: 'all', chapter: 'all' };
+let _mathBankFilter = { book: '真题', year: 'all', type: 'all', point: 'all', chapter: 'all' };
 let _mathBankFiltered = [];
 let _mathBankPage = 1;
 const _mathBankPerPage = 20;
@@ -2592,7 +2592,7 @@ async function loadMathBank() {
   try {
     const res = await fetch('api/math-questions.json');
     const data = await res.json();
-    _mathBank = data.questions || [];
+    _mathBank = (data.questions || []).map(q => q.book ? q : Object.assign({}, q, { book: '真题' }));
     _mathBankFilterReady = false;
     renderMathBank();
   } catch (e) {
@@ -2617,16 +2617,24 @@ function renderMathBankFilters() {
   }
 
   const years = [...new Set(_mathBank.map(q => q.year))].sort((a, b) => b - a);
-  const existingChapters = new Set(_mathBank.map(q => q.chapter).filter(Boolean));
+  const bookQs = _mathBankFilter.book === 'all' ? _mathBank : _mathBank.filter(q => q.book === _mathBankFilter.book);
+  const existingChapters = new Set(bookQs.map(q => q.chapter).filter(Boolean));
   const chapters = MATH_CHAPTERS.filter(c => existingChapters.has(c));
-  const points = [...new Set(_mathBank.map(q => q.knowledgePoint).filter(Boolean))].sort();
+  const points = [...new Set(_mathBank.filter(q => q.book === '真题').map(q => q.knowledgePoint).filter(Boolean))].sort();
 
   filterEl.innerHTML = `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+      <span style="font-size:12px;color:var(--text-secondary);">题集：</span>
+      <button class="btn btn-outline btn-sm ${_mathBankFilter.book==='真题'?'active':''}" data-bfilter="book" data-value="真题" onclick="setMBBook('真题')" style="font-size:12px;">历年真题</button>
+      <button class="btn btn-outline btn-sm ${_mathBankFilter.book==='30讲'?'active':''}" data-bfilter="book" data-value="30讲" onclick="setMBBook('30讲')" style="font-size:12px;">30讲例题</button>
+      <button class="btn btn-outline btn-sm ${_mathBankFilter.book==='1000题'?'active':''}" data-bfilter="book" data-value="1000题" onclick="setMBBook('1000题')" style="font-size:12px;">1000题·基础篇</button>
+    </div>
+    ${_mathBankFilter.book === '真题' ? `
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
       <span style="font-size:12px;color:var(--text-secondary);">年份：</span>
       <button class="btn btn-outline btn-sm ${_mathBankFilter.year==='all'?'active':''}" data-filter="year" data-value="all" onclick="setMBFilter('year','all')" style="font-size:12px;">全部</button>
       ${years.map(y => `<button class="btn btn-outline btn-sm ${_mathBankFilter.year===y?'active':''}" data-filter="year" data-value="${y}" onclick="setMBFilter('year','${y}')" style="font-size:12px;">${y}</button>`).join('')}
-    </div>
+    </div>` : ''}
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
       <span style="font-size:12px;color:var(--text-secondary);">题型：</span>
       <button class="btn btn-outline btn-sm ${_mathBankFilter.type==='all'?'active':''}" data-filter="type" data-value="all" onclick="setMBFilter('type','all')" style="font-size:12px;">全部</button>
@@ -2641,7 +2649,7 @@ function renderMathBankFilters() {
         ${chapters.map(c => `<button class="btn btn-outline btn-sm ${_mathBankFilter.chapter===c?'active':''}" data-filter="chapter" data-value="${c}" onclick="setMBFilter('chapter','${c}')" style="font-size:12px;">${c}</button>`).join('')}
       </div>
     </details>
-    ${points.length ? `
+    ${_mathBankFilter.book === '真题' && points.length ? `
     <details ${_mathBankFilter.point!=='all'?'open':''}>
       <summary id="mb-point-summary" style="font-size:12px;color:var(--text-secondary);cursor:pointer;padding:4px 0;">
         ${_mathBankFilter.point==='all' ? '🏷️ 按知识点筛选' : '🏷️ 当前：' + _mathBankFilter.point}
@@ -2669,6 +2677,7 @@ function renderMathBankList() {
 
   // 过滤
   _mathBankFiltered = _mathBank.filter(q => {
+    if (_mathBankFilter.book !== 'all' && q.book !== _mathBankFilter.book) return false;
     if (_mathBankFilter.year !== 'all' && q.year !== _mathBankFilter.year) return false;
     if (_mathBankFilter.type !== 'all' && q.type !== _mathBankFilter.type) return false;
     if (_mathBankFilter.chapter !== 'all' && q.chapter !== _mathBankFilter.chapter) return false;
@@ -2700,6 +2709,7 @@ function renderMathBankList() {
               <span class="tag tag-blue">${typeName(q.type)}</span>
               <span class="tag tag-green">${q.year}年</span>
               <span class="tag tag-purple">第${q.qnum}题</span>
+              <span class="tag tag-green">${q.book === '真题' ? q.year + '年' : (q.book || q.year)}</span>
               ${q.chapter ? `<span class="tag tag-orange" style="background:#fff3e0;color:#e65100;">${q.chapter}</span>` : ''}
               ${q.knowledgePoint ? `<span class="tag tag-gray">${q.knowledgePoint}</span>` : ''}
               ${(!hasAnswer || !hasExplanation) ? `<span class="tag tag-gray" style="background:#ffebee;color:#c62828;">答案/解析待补</span>` : ''}
@@ -2730,7 +2740,7 @@ function renderMathBankList() {
           </div>
           <button class="btn btn-outline btn-sm" id="mb-btn-${q.id}" onclick="toggleMBAnswer('${q.id}')" style="font-size:12px;flex-shrink:0;">答案</button>
           <button class="btn btn-outline btn-sm" onclick="addBankToWrong('${q.year}','${q.qnum}','${q.type||''}','${(q.chapter||'').replace(/'/g,"\\'")}')" style="font-size:12px;flex-shrink:0;color:var(--danger);" title="加入错题本">📕错题</button>
-          <button class="btn btn-outline btn-sm" onclick="logPracticeFromBank('${q.year}','${q.qnum}')" style="font-size:12px;flex-shrink:0;" title="用4问标准记录本次练习">📋记录</button>
+          <button class="btn btn-outline btn-sm" onclick="logPracticeFromQid('${q.id}')" style="font-size:12px;flex-shrink:0;" title="用4问标准记录本次练习">📋记录</button>
         </div>
       </div>
     `;
@@ -3109,6 +3119,7 @@ modules['math-practice'] = (c) => {
           <option value="题库">题库</option>
           <option value="课本例题">课本例题</option>
           <option value="课后题">课后题</option>
+          <option value="30讲例题">30讲例题</option>
           <option value="1000题">1000题</option>
           <option value="真题">真题</option>
           <option value="其他">其他</option>
@@ -3164,6 +3175,7 @@ modules['math-practice'] = (c) => {
           <option value="题库">题库</option>
           <option value="课本例题">课本例题</option>
           <option value="课后题">课后题</option>
+          <option value="30讲例题">30讲例题</option>
           <option value="1000题">1000题</option>
           <option value="真题">真题</option>
           <option value="其他">其他</option>
@@ -3330,7 +3342,7 @@ function renderPracticeEditRow(r) {
   const score = (r.q1?1:0) + (r.q2?1:0) + (r.q3?1:0) + (r.q4?1:0);
   const color = PRACTICE_SCORE_COLORS[score];
   const label = PRACTICE_SCORE_LABELS[score];
-  const sources = ['题库','课本例题','课后题','1000题','真题','其他'];
+  const sources = ['题库','课本例题','课后题','30讲例题','1000题','真题','其他'];
   return `
     <div class="todo-item" style="flex-wrap:wrap;gap:8px;background:var(--bg-secondary);border:1px solid var(--accent);">
       <div style="flex:1;min-width:240px;">
@@ -3473,6 +3485,40 @@ function logPracticeFromBank(year, qnum) {
     if (refEl) refEl.value = year + '年第' + qnum + '题';
     if (refEl) refEl.focus();
   }, 100);
+}
+
+// 从题库卡片跳转到「4问练习记录」，按题集自动填好来源与题目标识
+function logPracticeFromQid(qid) {
+  const q = (_mathBank || []).find(x => x.id === qid);
+  if (!q) { toast('未找到该题'); return; }
+  logPracticeFromQuestion(q);
+}
+
+function logPracticeFromQuestion(q) {
+  switchModule('math-practice');
+  setTimeout(() => {
+    const srcEl = document.getElementById('practiceSource');
+    const refEl = document.getElementById('practiceRef');
+    let src = '题库', ref = '';
+    if (q.book === '30讲') { src = '30讲例题'; ref = '30讲 例' + q.qnum; }
+    else if (q.book === '1000题') { src = '1000题'; ref = '1000题 ' + (q.chapter || '') + ' #' + q.qnum; }
+    else { src = '题库'; ref = (q.year || '') + '年第' + q.qnum + '题'; }
+    if (srcEl) srcEl.value = src;
+    if (refEl) refEl.value = ref.trim();
+    if (window.togglePracticeRefInput) togglePracticeRefInput();
+    if (refEl) refEl.focus();
+    toast('已填入来源与题号，勾好4问后点「记录本次练习」');
+  }, 120);
+}
+
+// 题集来源切换：重建筛选栏（年份/知识点仅在真题下显示）
+function setMBBook(book) {
+  _mathBankFilter.book = book;
+  _mathBankFilter.year = 'all';
+  _mathBankFilter.point = 'all';
+  _mathBankPage = 1;
+  _mathBankFilterReady = false; // 强制重建筛选栏
+  renderMathBank();
 }
 
 function addBankToWrong(year, qnum, type, chapter) {
