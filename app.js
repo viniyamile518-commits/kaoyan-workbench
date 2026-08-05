@@ -2586,12 +2586,26 @@ const MATH_BANK_TYPES = [
   { id: 'solution', name: '解答题' }
 ];
 
+// 题库数据加载：本地走 /api/math-questions（服务端聚合）；静态部署(GitHub Pages)无服务端，
+// 回退到分题集静态文件 api/math-questions-{zhen,30jiang,1000}.json
+async function loadMathBankData() {
+  try {
+    const res = await fetch('/api/math-questions');
+    if (res.ok) return await res.json();
+  } catch (e) { /* 静态部署下走回退 */ }
+  const [a, b, c] = await Promise.all([
+    fetch('api/math-questions-zhen.json').then(r => r.json()).catch(() => ({ questions: [] })),
+    fetch('api/math-questions-30jiang.json').then(r => r.json()).catch(() => ({ questions: [] })),
+    fetch('api/math-questions-1000.json').then(r => r.json()).catch(() => ({ questions: [] }))
+  ]);
+  return { questions: [].concat(a.questions || [], b.questions || [], c.questions || []) };
+}
+
 async function loadMathBank() {
   const el = document.getElementById('mathBankList');
   if (el) el.innerHTML = '<div class="empty-state-text">加载中…</div>';
   try {
-    const res = await fetch('api/math-questions.json');
-    const data = await res.json();
+    const data = await loadMathBankData();
     _mathBank = (data.questions || []).map(q => q.book ? q : Object.assign({}, q, { book: '真题' }));
     _mathBankFilterReady = false;
     renderMathBank();
