@@ -3011,7 +3011,8 @@ async function loadPdfExams(filter) {
   _examFilter = filter;
   if (!_examPdfData) {
     try {
-      _examPdfData = { exams: {}, solutions: {} };
+      const res = await fetch('/api/math-exams');
+      _examPdfData = await res.json();
     } catch (e) {
       document.getElementById('pdfExamList').innerHTML = '<div class="empty-state-text">无法加载真题文件，请确认服务器正常运行</div>';
       return;
@@ -3323,14 +3324,29 @@ function renderPracticeLog() {
   const statHalf = document.getElementById('statHalf');
   const statFail = document.getElementById('statFail');
   if (statTotal) {
-    let pass = 0, half = 0, fail = 0;
+    // 按题目标识(ref)归组：同一题的原始记录与重做记录视为一题。
+    // 总练习数 = 去重后的题目数（重做不重复计入）；
+    // 熟练度按每题【最新一次】练习情况统计（重做会覆盖旧评价）。
+    const groups = {};
     filtered.forEach(r => {
-      const score = (r.q1?1:0) + (r.q2?1:0) + (r.q3?1:0) + (r.q4?1:0);
+      const key = r.ref || r.id;
+      (groups[key] || (groups[key] = [])).push(r);
+    });
+    let pass = 0, half = 0, fail = 0;
+    Object.keys(groups).forEach(key => {
+      const recs = groups[key];
+      // 取最新一次：日期降序 → 同日期按重做次数(attempt)降序 → id 降序兜底
+      const latest = recs.slice().sort((a, b) =>
+        b.date.localeCompare(a.date) ||
+        (b.attempt || 0) - (a.attempt || 0) ||
+        b.id.localeCompare(a.id)
+      )[0];
+      const score = (latest.q1?1:0) + (latest.q2?1:0) + (latest.q3?1:0) + (latest.q4?1:0);
       if (score === 4) pass++;
       else if (score >= 2) half++;
       else fail++;
     });
-    statTotal.textContent = filtered.length;
+    statTotal.textContent = Object.keys(groups).length;
     statPass.textContent = pass;
     statHalf.textContent = half;
     statFail.textContent = fail;
@@ -3908,7 +3924,7 @@ async function loadEngBank() {
   if (!_engBank) {
     filterEl.innerHTML = '<div class="empty-state-text">加载中...</div>';
     try {
-      const res = await fetch('api/eng-questions.json');
+      const res = await fetch('/api/eng-questions');
       const data = await res.json();
       _engBank = data.questions || [];
     } catch (e) {
