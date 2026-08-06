@@ -3318,17 +3318,18 @@ function renderPracticeLog() {
     return true;
   });
 
-  // 统计（随筛选实时变化）
+  // 统计（永远基于全部记录，不受上方筛选影响）
   const statTotal = document.getElementById('statTotal');
   const statPass = document.getElementById('statPass');
   const statHalf = document.getElementById('statHalf');
   const statFail = document.getElementById('statFail');
   if (statTotal) {
+    // 统计永远基于【全部记录】，不受上方筛选（来源/掌握度/日期/重做次数）影响。
     // 按题目标识(ref)归组：同一题的原始记录与重做记录视为一题。
     // 总练习数 = 去重后的题目数（重做不重复计入）；
     // 熟练度按每题【最新一次】练习情况统计（重做会覆盖旧评价）。
     const groups = {};
-    filtered.forEach(r => {
+    records.forEach(r => {
       const key = r.ref || r.id;
       (groups[key] || (groups[key] = [])).push(r);
     });
