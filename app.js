@@ -3317,14 +3317,22 @@ function renderPracticeLog() {
     statFail.textContent = fail;
   }
 
-  if (!filtered.length) {
+  if (!filtered.length && !editingPracticeId) {
     el.innerHTML = '<div class="empty-state"><div class="empty-state-text">没有符合条件的练习记录~</div></div>';
     return;
   }
 
-  const sorted = [...filtered].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  let renderList = [...filtered].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  // 修复：重做/编辑自动创建的新记录可能不满足当前筛选条件，
+  // 强制把正在编辑的记录放入渲染列表顶部，避免编辑窗口被筛选隐藏
+  if (editingPracticeId) {
+    const editingRec = records.find(r => r.id === editingPracticeId);
+    if (editingRec && !renderList.some(r => r.id === editingPracticeId)) {
+      renderList = [editingRec, ...renderList];
+    }
+  }
 
-  el.innerHTML = sorted.map(r => {
+  el.innerHTML = renderList.map(r => {
     if (r.id === editingPracticeId) return renderPracticeEditRow(r);
     const score = (r.q1?1:0) + (r.q2?1:0) + (r.q3?1:0) + (r.q4?1:0);
     return renderPracticeViewRow(r, score);
