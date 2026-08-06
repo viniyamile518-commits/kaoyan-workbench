@@ -3221,6 +3221,14 @@ modules['math-practice'] = (c) => {
         <input class="input" id="practiceFrom" type="date" style="width:140px;font-size:12px;" onchange="renderPracticeLog()" title="起始日期">
         <span style="font-size:12px;color:var(--text-light);">至</span>
         <input class="input" id="practiceTo" type="date" style="width:140px;font-size:12px;" onchange="renderPracticeLog()" title="结束日期">
+        <select class="select" id="practiceRetry" style="width:130px;font-size:12px;" onchange="renderPracticeLog()" title="按重做次数筛选">
+          <option value="all">全部重做</option>
+          <option value="orig">原始题(未重做)</option>
+          <option value="r1">第1次重做</option>
+          <option value="r2">第2次重做</option>
+          <option value="r3">第3次重做</option>
+          <option value="r4plus">第4次及以上</option>
+        </select>
         <button class="btn btn-outline btn-sm" style="font-size:11px;" onclick="resetPracticeFilters()">重置筛选</button>
       </div>
       <div id="practiceList"></div>
@@ -3288,6 +3296,8 @@ function renderPracticeLog() {
   const mastery = fMastery ? fMastery.value : 'all';
   const from = fFrom ? fFrom.value : '';
   const to = fTo ? fTo.value : '';
+  const fRetry = document.getElementById('practiceRetry');
+  const retry = fRetry ? fRetry.value : 'all';
 
   const filtered = records.filter(r => {
     const score = (r.q1?1:0) + (r.q2?1:0) + (r.q3?1:0) + (r.q4?1:0);
@@ -3295,6 +3305,15 @@ function renderPracticeLog() {
     if (mastery !== 'all' && practiceMasteryBucket(score) !== mastery) return false;
     if (from && r.date < from) return false;
     if (to && r.date > to) return false;
+    if (retry !== 'all') {
+      const isOrig = !r.retryOf;
+      const at = r.attempt || 0;
+      if (retry === 'orig' && !isOrig) return false;
+      if (retry === 'r1' && at !== 1) return false;
+      if (retry === 'r2' && at !== 2) return false;
+      if (retry === 'r3' && at !== 3) return false;
+      if (retry === 'r4plus' && at < 4) return false;
+    }
     return true;
   });
 
@@ -3465,6 +3484,7 @@ function savePracticeEdit(id) {
 function resetPracticeFilters() {
   const a = document.getElementById('practiceFilter'); if (a) a.value = 'all';
   const b = document.getElementById('practiceMastery'); if (b) b.value = 'all';
+  const e = document.getElementById('practiceRetry'); if (e) e.value = 'all';
   const c = document.getElementById('practiceFrom'); if (c) c.value = '';
   const d = document.getElementById('practiceTo'); if (d) d.value = '';
   renderPracticeLog();
