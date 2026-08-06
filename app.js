@@ -3300,7 +3300,38 @@ function renderPracticeLog() {
   const fRetry = document.getElementById('practiceRetry');
   const retry = fRetry ? fRetry.value : 'all';
 
-  const filtered = records.filter(r => {
+  // === 以"每题最新一次"为唯一维度（覆盖式） ===
+  // 同一题的原始记录 + 全部重做记录归为 1 题；归组键 = 沿 retryOf 链回溯到根原始记录（ref 或 id）。
+  // 列表渲染、筛选判定、统计分桶 全部以"该组最新一次"为准：
+  //   - 列表只显示每题的最新一条记录（同一题的旧版本不再重复显示），
+  //   - 筛"未掌握"会显示【当前各题最新一次仍没掌握】的题（旧评价被最新一次覆盖），
+  //   - 统计永远是【全部题的最新一次】分桶，与列表同源。
+  const byId = {};
+  records.forEach(r => { byId[r.id] = r; });
+  const rootKeyOf = (r) => {
+    let cur = r, guard = 0;
+    while (cur && cur.retryOf && byId[cur.retryOf] && guard < 200) {
+      cur = byId[cur.retryOf];
+      guard++;
+    }
+    return cur.ref || cur.id;
+  };
+  const groups = {};
+  records.forEach(r => {
+    const key = rootKeyOf(r);
+    (groups[key] || (groups[key] = [])).push(r);
+  });
+  // 每组取最新一次：日期降序 → 同日期按重做次数(attempt)降序 → id 降序兜底
+  const latestPerGroup = Object.keys(groups).map(key => {
+    return groups[key].slice().sort((a, b) =>
+      b.date.localeCompare(a.date) ||
+      (b.attempt || 0) - (a.attempt || 0) ||
+      b.id.localeCompare(a.id)
+    )[0];
+  });
+
+  // 在"每题最新一次"上应用筛选
+  const filtered = latestPerGroup.filter(r => {
     const score = (r.q1?1:0) + (r.q2?1:0) + (r.q3?1:0) + (r.q4?1:0);
     if (source !== 'all' && r.source !== source) return false;
     if (mastery !== 'all' && practiceMasteryBucket(score) !== mastery) return false;
@@ -3318,48 +3349,20 @@ function renderPracticeLog() {
     return true;
   });
 
-  // 统计（永远基于全部记录，不受上方筛选影响）
+  // 统计（永远基于全部记录 = 全部题的最新一次，与列表同源）
   const statTotal = document.getElementById('statTotal');
   const statPass = document.getElementById('statPass');
   const statHalf = document.getElementById('statHalf');
   const statFail = document.getElementById('statFail');
   if (statTotal) {
-    // 统计永远基于【全部记录】，不受上方筛选（来源/掌握度/日期/重做次数）影响。
-    // 按【题目】归组：同一题的原始记录 + 其所有重做记录 = 1 题。
-    // 归组键 = 沿 retryOf 链回溯到根原始记录（ref 或 id）；
-    // 这样即使记录没有 ref，重做记录也能通过 retryOf 正确挂回原题去重。
-    // 总练习数 = 去重后的题目数（重做不重复计入）；
-    // 熟练度按每题【最新一次】练习情况统计（重做会覆盖旧评价）。
-    const byId = {};
-    records.forEach(r => { byId[r.id] = r; });
-    const rootKeyOf = (r) => {
-      let cur = r, guard = 0;
-      while (cur && cur.retryOf && byId[cur.retryOf] && guard < 200) {
-        cur = byId[cur.retryOf];
-        guard++;
-      }
-      return cur.ref || cur.id;
-    };
-    const groups = {};
-    records.forEach(r => {
-      const key = rootKeyOf(r);
-      (groups[key] || (groups[key] = [])).push(r);
-    });
     let pass = 0, half = 0, fail = 0;
-    Object.keys(groups).forEach(key => {
-      const recs = groups[key];
-      // 取最新一次：日期降序 → 同日期按重做次数(attempt)降序 → id 降序兜底
-      const latest = recs.slice().sort((a, b) =>
-        b.date.localeCompare(a.date) ||
-        (b.attempt || 0) - (a.attempt || 0) ||
-        b.id.localeCompare(a.id)
-      )[0];
+    latestPerGroup.forEach(latest => {
       const score = (latest.q1?1:0) + (latest.q2?1:0) + (latest.q3?1:0) + (latest.q4?1:0);
       if (score === 4) pass++;
       else if (score >= 2) half++;
       else fail++;
     });
-    statTotal.textContent = Object.keys(groups).length;
+    statTotal.textContent = latestPerGroup.length;
     statPass.textContent = pass;
     statHalf.textContent = half;
     statFail.textContent = fail;
