@@ -3325,12 +3325,24 @@ function renderPracticeLog() {
   const statFail = document.getElementById('statFail');
   if (statTotal) {
     // 统计永远基于【全部记录】，不受上方筛选（来源/掌握度/日期/重做次数）影响。
-    // 按题目标识(ref)归组：同一题的原始记录与重做记录视为一题。
+    // 按【题目】归组：同一题的原始记录 + 其所有重做记录 = 1 题。
+    // 归组键 = 沿 retryOf 链回溯到根原始记录（ref 或 id）；
+    // 这样即使记录没有 ref，重做记录也能通过 retryOf 正确挂回原题去重。
     // 总练习数 = 去重后的题目数（重做不重复计入）；
     // 熟练度按每题【最新一次】练习情况统计（重做会覆盖旧评价）。
+    const byId = {};
+    records.forEach(r => { byId[r.id] = r; });
+    const rootKeyOf = (r) => {
+      let cur = r, guard = 0;
+      while (cur && cur.retryOf && byId[cur.retryOf] && guard < 200) {
+        cur = byId[cur.retryOf];
+        guard++;
+      }
+      return cur.ref || cur.id;
+    };
     const groups = {};
     records.forEach(r => {
-      const key = r.ref || r.id;
+      const key = rootKeyOf(r);
       (groups[key] || (groups[key] = [])).push(r);
     });
     let pass = 0, half = 0, fail = 0;
