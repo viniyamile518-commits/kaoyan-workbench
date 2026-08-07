@@ -391,7 +391,17 @@ function scheduleAutoSync() {
 // 智能合并：数组按 id 合并（避免丢记录），对象浅合并，原始值本地优先
 // ===== 同步合并（防 mojibake：优选中文比例更高的版本） =====
 function _isMojibake(s) {
-  return typeof s === 'string' && (s.indexOf('Ã') !== -1 || s.indexOf('Â') !== -1);
+  if (typeof s !== 'string' || !s) return false;
+  // 经典双重 mojibake 标记：Ã (U+00C3) / Â (U+00C2) 频繁出现
+  if (s.indexOf('Ã') !== -1 || s.indexOf('Â') !== -1) return true;
+  // 单层 mojibake 残骸：绝大多数字符都是 latin-1（0x80-0xFF），无中文 → 像 `é»è®¤å»ç»` `ÄÄÄ` `ÊÑÄ`
+  let latin1 = 0, cn = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0x80 && c <= 0xff) latin1++;
+    else if (c >= 0x4e00 && c <= 0x9fff) cn++;
+  }
+  return latin1 / s.length >= 0.3 && cn / s.length < 0.1;
 }
 function _chineseRatio(s) {
   if (typeof s !== 'string' || !s) return 0;
@@ -415,34 +425,65 @@ function _recordQuality(rec) {
   });
   return fields ? score / fields : 0;
 }
-// ===== Mojibake 自愈：迭代 UTF-8 解码（5-7 层嵌套 mojibake 通用） =====
+// ===== Mojibake 自愈：迭代 UTF-8 解码（5+ 层嵌套 mojibake 通用）=====
 // 浏览器与 Node 18+ 都有 TextDecoder，等效 Python 的 s.encode('latin-1').decode('utf-8')
+// 整串 UTF-8 解码若遇非法字节序列（fatal 抛错），退化到分段解码：
+//   按"非 latin-1 字符"切段，对每一段独立 decode，跳过非法段
 function _repairMojibake(s) {
   if (typeof s !== 'string' || !s) return s;
-  // 用 TextDecoder 探测：能解码 + 解码后不是自己 + 解码后包含中文字符 → 替换并继续
   let cur = s;
-  for (let i = 0; i < 8; i++) {
-    let bytes = null;
+  for (let round = 0; round < 12; round++) {
+    let hasNonLatin1 = false;
+    for (let j = 0; j < cur.length; j++) {
+      if (cur.charCodeAt(j) > 0xff) { hasNonLatin1 = true; break; }
+    }
+    if (hasNonLatin1) break;
+
+    // 先尝试整串 fatal 解码
+    let wholeOK = false;
     try {
-      bytes = new Uint8Array(cur.length);
-      let bad = false;
-      for (let j = 0; j < cur.length; j++) {
-        const c = cur.charCodeAt(j);
-        if (c > 0xff) { bad = true; break; }
-        bytes[j] = c;
-      }
-      if (bad) break;
+      const bytes = new Uint8Array(cur.length);
+      for (let j = 0; j < cur.length; j++) bytes[j] = cur.charCodeAt(j);
       const dec = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-      if (!dec || dec === cur) break;
-      cur = dec;
-      // 终止条件：当前字符串中文字符比例 ≥ 0.3（典型中文文本）
+      if (dec && dec !== cur) { cur = dec; wholeOK = true; }
+    } catch (e) { /* 非法序列 → 分段 */ }
+
+    if (wholeOK) {
       let cn = 0;
       for (let j = 0; j < cur.length; j++) {
-        const code = cur.charCodeAt(j);
-        if (code >= 0x4e00 && code <= 0x9fff) cn++;
+        const c = cur.charCodeAt(j);
+        if (c >= 0x4e00 && c <= 0x9fff) cn++;
       }
       if (cn / cur.length >= 0.3) break;
-    } catch (e) { break; }
+      continue;
+    }
+
+    // 分段解码：按"非 latin-1 字符"切段，每段独立尝试 fatal-UTF-8 decode
+    let result = '', seg = '';
+    const flush = () => {
+      if (!seg) return;
+      try {
+        const u8 = new Uint8Array(seg.length);
+        for (let k = 0; k < seg.length; k++) u8[k] = seg.charCodeAt(k);
+        const d = new TextDecoder('utf-8', { fatal: true }).decode(u8);
+        result += d;
+      } catch (e) { result += seg; }
+      seg = '';
+    };
+    for (let j = 0; j < cur.length; j++) {
+      const c = cur.charCodeAt(j);
+      if (c > 0xff) { flush(); result += cur[j]; }
+      else seg += cur[j];
+    }
+    flush();
+    if (!result || result === cur) break;
+    cur = result;
+    let cn = 0;
+    for (let j = 0; j < cur.length; j++) {
+      const c = cur.charCodeAt(j);
+      if (c >= 0x4e00 && c <= 0x9fff) cn++;
+    }
+    if (cn / cur.length >= 0.3) break;
   }
   return cur;
 }
@@ -450,9 +491,11 @@ function _repairRecord(rec) {
   if (!rec || typeof rec !== 'object') return rec;
   ['source','ref','note','content'].forEach(k => {
     if (rec[k] && typeof rec[k] === 'string') {
-      const fixed = _repairMojibake(rec[k]);
-      // 接受条件：原文含 mojibake 标记 或 修复后中文字符更多
-      if (_isMojibake(rec[k]) || _chineseRatio(fixed) > _chineseRatio(rec[k])) {
+      const orig = rec[k];
+      if (!_isMojibake(orig)) return;
+      const fixed = _repairMojibake(orig);
+      // 接受条件：修复后中文字符更多，或者整体显著缩短（说明脱掉了 mojibake 膨胀字节）
+      if (_chineseRatio(fixed) > _chineseRatio(orig) || (fixed.length < orig.length * 0.7 && orig.length > fixed.length)) {
         rec[k] = fixed;
       }
     }
@@ -462,31 +505,57 @@ function _repairRecord(rec) {
 function _repairAllData(data) {
   if (!data || typeof data !== 'object') return data;
   let fixed = 0;
+  const tryFix = (s) => {
+    if (typeof s !== 'string' || !_isMojibake(s)) return s;
+    const f = _repairMojibake(s);
+    return (_chineseRatio(f) > _chineseRatio(s) || (f.length < s.length * 0.7 && s.length > f.length)) ? f : s;
+  };
+  // 递归扫任意路径里的字符串字段（含嵌套对象/数组，对 ky_coursesV2_* 这种 {groups:[{name:'...'}]} 也能命中）
+  const scan = (val) => {
+    if (Array.isArray(val)) {
+      val.forEach((item, i) => {
+        if (item && typeof item === 'object') {
+          const before = JSON.stringify(item);
+          _repairRecord(item);
+          if (JSON.stringify(item) !== before) fixed++;
+          Object.keys(item).forEach(k => {
+            const x = item[k];
+            if (typeof x === 'string') { const f = tryFix(x); if (f !== x) { item[k] = f; fixed++; } }
+            else if (x && typeof x === 'object') scan(x);
+          });
+        } else if (typeof item === 'string') {
+          const f = tryFix(item);
+          if (f !== item) { val[i] = f; fixed++; }
+        }
+      });
+    } else if (val && typeof val === 'object') {
+      Object.keys(val).forEach(k => {
+        const x = val[k];
+        if (typeof x === 'string') { const f = tryFix(x); if (f !== x) { val[k] = f; fixed++; } }
+        else if (x && typeof x === 'object') scan(x);
+      });
+    }
+  };
   Object.keys(data).forEach(k => {
-    if (Array.isArray(data[k])) {
-      data[k].forEach(r => {
-        if (r && typeof r === 'object') {
-          const before = JSON.stringify(r);
-          _repairRecord(r);
-          if (JSON.stringify(r) !== before) fixed++;
+    const v = data[k];
+    if (Array.isArray(v)) {
+      v.forEach(item => {
+        if (item && typeof item === 'object') {
+          const before = JSON.stringify(item);
+          _repairRecord(item);
+          if (JSON.stringify(item) !== before) fixed++;
+          Object.keys(item).forEach(kk => {
+            const x = item[kk];
+            if (typeof x === 'string') { const f = tryFix(x); if (f !== x) { item[kk] = f; fixed++; } }
+            else if (x && typeof x === 'object') scan(x);
+          });
         }
       });
-    } else if (data[k] && typeof data[k] === 'object') {
-      Object.keys(data[k]).forEach(kk => {
-        if (typeof data[k][kk] === 'string' && _isMojibake(data[k][kk])) {
-          const fixed_v = _repairMojibake(data[k][kk]);
-          if (_chineseRatio(fixed_v) > _chineseRatio(data[k][kk])) {
-            data[k][kk] = fixed_v;
-            fixed++;
-          }
-        }
-      });
-    } else if (typeof data[k] === 'string' && _isMojibake(data[k])) {
-      const fixed_v = _repairMojibake(data[k]);
-      if (_chineseRatio(fixed_v) > _chineseRatio(data[k])) {
-        data[k] = fixed_v;
-        fixed++;
-      }
+    } else if (v && typeof v === 'object') {
+      scan(v);
+    } else if (typeof v === 'string') {
+      const f = tryFix(v);
+      if (f !== v) { data[k] = f; fixed++; }
     }
   });
   if (fixed > 0) console.log('[自愈] 修复了 ' + fixed + ' 个 mojibake 字段');
@@ -3289,8 +3358,7 @@ async function loadPdfExams(filter) {
   _examFilter = filter;
   if (!_examPdfData) {
     try {
-      const res = await fetch('/api/math-exams');
-      _examPdfData = await res.json();
+      _examPdfData = { exams: {}, solutions: {} };
     } catch (e) {
       document.getElementById('pdfExamList').innerHTML = '<div class="empty-state-text">无法加载真题文件，请确认服务器正常运行</div>';
       return;
@@ -4218,7 +4286,7 @@ async function loadEngBank() {
   if (!_engBank) {
     filterEl.innerHTML = '<div class="empty-state-text">加载中...</div>';
     try {
-      const res = await fetch('/api/eng-questions');
+      const res = await fetch('api/eng-questions.json');
       const data = await res.json();
       _engBank = data.questions || [];
     } catch (e) {
