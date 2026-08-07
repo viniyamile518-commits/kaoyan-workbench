@@ -385,6 +385,32 @@ function scheduleAutoSync() {
 }
 
 // 智能合并：数组按 id 合并（避免丢记录），对象浅合并，原始值本地优先
+// ===== 同步合并（防 mojibake：优选中文比例更高的版本） =====
+function _isMojibake(s) {
+  return typeof s === 'string' && (s.indexOf('Ã') !== -1 || s.indexOf('Â') !== -1);
+}
+function _chineseRatio(s) {
+  if (typeof s !== 'string' || !s) return 0;
+  let cn = 0;
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code >= 0x4e00 && code <= 0x9fff) cn++;
+  }
+  return cn / s.length;
+}
+function _recordQuality(rec) {
+  if (!rec || typeof rec !== 'object') return 0;
+  // 综合评分 = 各字段中文比例之和
+  let score = 0, fields = 0;
+  ['source','ref','note','content'].forEach(k => {
+    if (rec[k]) {
+      score += _chineseRatio(rec[k]);
+      if (_isMojibake(rec[k])) score -= 0.5;  // 严重惩罚
+      fields++;
+    }
+  });
+  return fields ? score / fields : 0;
+}
 function smartMerge(local, cloud) {
   const merged = {};
   const keys = new Set([
@@ -398,8 +424,23 @@ function smartMerge(local, cloud) {
     if (c === undefined) { merged[k] = l; continue; }
     if (Array.isArray(l) && Array.isArray(c)) {
       const byId = new Map();
+      // 先放云端（信任度高）
       c.forEach((x) => { if (x && x.id != null) byId.set(x.id, x); });
-      l.forEach((x) => { if (x && x.id != null) byId.set(x.id, x); else byId.set('__' + Math.random(), x); });
+      // 本地：如果同 id 且本地明显更脏（中文比例更低或含 mojibake），丢弃本地
+      l.forEach((x) => {
+        if (x && x.id != null) {
+          const cloudRec = byId.get(x.id);
+          if (cloudRec) {
+            const lq = _recordQuality(x);
+            const cq = _recordQuality(cloudRec);
+            if (lq > cq + 0.05) byId.set(x.id, x);  // 本地明显更优才覆盖
+          } else {
+            byId.set(x.id, x);
+          }
+        } else {
+          byId.set('__' + Math.random(), x);
+        }
+      });
       const seen = new Set(c.filter((x) => x && x.id != null).map((x) => x.id));
       const arr = c.slice();
       l.forEach((x) => { if (x && x.id != null && !seen.has(x.id)) arr.push(x); });
@@ -407,7 +448,7 @@ function smartMerge(local, cloud) {
     } else if (l && typeof l === 'object' && c && typeof c === 'object') {
       merged[k] = { ...c, ...l };
     } else {
-      merged[k] = l; // 原始值本地优先
+      merged[k] = l;
     }
   }
   return merged;
