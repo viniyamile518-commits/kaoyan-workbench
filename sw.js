@@ -1,1 +1,75 @@
-Ly8g6ICD56CU5bel5L2c5Y+wIFNlcnZpY2UgV29ya2VyIOKAlOKAlCDnprvnur/nvJPlrZggKyBQV0Eg5a6J6KOF5pSv5oyBCmNvbnN0IENBQ0hFID0gJ2t5LXdiLXYxJzsKY29uc3QgU0hFTEwgPSBbCiAgJy4vJywKICAnaW5kZXguaHRtbCcsCiAgJ2FwcC5qcycsCiAgJ2FwcC1tZW1vcnkuanMnLAogICdhcHAtcGxhbm5lci5qcycsCiAgJ3N0eWxlLmNzcycsCiAgJ21hbmlmZXN0Lmpzb24nLAogICdpY29uLTE5Mi5wbmcnLAogICdpY29uLTUxMi5wbmcnLAogICdpY29uLW1hc2thYmxlLTUxMi5wbmcnLAogICdhcHBsZS10b3VjaC1pY29uLnBuZycKXTsKCnNlbGYuYWRkRXZlbnRMaXN0ZW5lcignaW5zdGFsbCcsIChlKSA9PiB7CiAgZS53YWl0VW50aWwoCiAgICBjYWNoZXMub3BlbihDQUNIRSkudGhlbigoYykgPT4gYy5hZGRBbGwoU0hFTEwpKS50aGVuKCgpID0+IHNlbGYuc2tpcFdhaXRpbmcoKSkKICApOwp9KTsKCnNlbGYuYWRkRXZlbnRMaXN0ZW5lcignYWN0aXZhdGUnLCAoZSkgPT4gewogIGUud2FpdFVudGlsKAogICAgY2FjaGVzLmtleXMoKQogICAgICAudGhlbigoa2V5cykgPT4gUHJvbWlzZS5hbGwoa2V5cy5maWx0ZXIoKGspID0+IGsgIT09IENBQ0hFKS5tYXAoKGspID0+IGNhY2hlcy5kZWxldGUoaykpKSkKICAgICAgLnRoZW4oKCkgPT4gc2VsZi5jbGllbnRzLmNsYWltKCkpCiAgKTsKfSk7CgpzZWxmLmFkZEV2ZW50TGlzdGVuZXIoJ2ZldGNoJywgKGUpID0+IHsKICBjb25zdCByZXEgPSBlLnJlcXVlc3Q7CiAgaWYgKHJlcS5tZXRob2QgIT09ICdHRVQnKSByZXR1cm47IC8vIOS4jeaLpuaIquWGmeivt+axgu+8iOWQqyBHaXRIdWIgQVBJIOeahCBQVVQg5ZCM5q2l77yJCgogIGNvbnN0IHVybCA9IG5ldyBVUkwocmVxLnVybCk7CgogIC8vIOWvvOiIquivt+axgu+8mue9kee7nOS8mOWFiO+8jOemu+e6v+WbnumAgOe8k+WtmOmmlumhtQogIGlmIChyZXEubW9kZSA9PT0gJ25hdmlnYXRlJykgewogICAgZS5yZXNwb25kV2l0aCgKICAgICAgZmV0Y2gocmVxKQogICAgICAgIC50aGVuKChyKSA9PiB7IGNvbnN0IGNwID0gci5jbG9uZSgpOyBjYWNoZXMub3BlbihDQUNIRSkudGhlbigoYykgPT4gYy5wdXQoJ2luZGV4Lmh0bWwnLCBjcCkpOyByZXR1cm4gcjsgfSkKICAgICAgICAuY2F0Y2goKCkgPT4gY2FjaGVzLm1hdGNoKCdpbmRleC5odG1sJykudGhlbigobSkgPT4gbSB8fCBjYWNoZXMubWF0Y2goJy4vJykpKQogICAgKTsKICAgIHJldHVybjsKICB9CgogIC8vIOi3qOWfnyBDRE7vvIjlpoIgTWF0aEpheO+8ie+8mmNhY2hlLWZpcnN077yM5pSv5oyB56a757q/5riy5p+T5YWs5byPCiAgaWYgKHVybC5vcmlnaW4gIT09IGxvY2F0aW9uLm9yaWdpbikgewogICAgZS5yZXNwb25kV2l0aCgKICAgICAgY2FjaGVzLm9wZW4oQ0FDSEUpLnRoZW4oYXN5bmMgKGMpID0+IHsKICAgICAgICBjb25zdCBjYWNoZWQgPSBhd2FpdCBjLm1hdGNoKHJlcSk7CiAgICAgICAgaWYgKGNhY2hlZCkgcmV0dXJuIGNhY2hlZDsKICAgICAgICB0cnkgewogICAgICAgICAgY29uc3QgciA9IGF3YWl0IGZldGNoKHJlcSk7CiAgICAgICAgICBjLnB1dChyZXEsIHIuY2xvbmUoKSk7CiAgICAgICAgICByZXR1cm4gcjsKICAgICAgICB9IGNhdGNoIHsKICAgICAgICAgIHJldHVybiBjYWNoZWQgfHwgUmVzcG9uc2UuZXJyb3IoKTsKICAgICAgICB9CiAgICAgIH0pCiAgICApOwogICAgcmV0dXJuOwogIH0KCiAgLy8g5ZCM5rqQ6Z2Z5oCB6LWE5rqQ77yIanMvY3NzL+WbvueJhy/popjlupMvanNvbu+8ie+8mnN0YWxlLXdoaWxlLXJldmFsaWRhdGUKICBlLnJlc3BvbmRXaXRoKAogICAgY2FjaGVzLm9wZW4oQ0FDSEUpLnRoZW4oYXN5bmMgKGMpID0+IHsKICAgICAgY29uc3QgY2FjaGVkID0gYXdhaXQgYy5tYXRjaChyZXEpOwogICAgICBjb25zdCBuZXR3b3JrID0gZmV0Y2gocmVxKQogICAgICAgIC50aGVuKChyKSA9PiB7IGMucHV0KHJlcSwgci5jbG9uZSgpKTsgcmV0dXJuIHI7IH0pCiAgICAgICAgLmNhdGNoKCgpID0+IG51bGwpOwogICAgICByZXR1cm4gY2FjaGVkIHx8IG5ldHdvcms7CiAgICB9KQogICk7Cn0pOwo=
+// 考研工作台 Service Worker —— 离线缓存 + PWA 安装支持
+const CACHE = 'ky-wb-v1';
+const SHELL = [
+  './',
+  'index.html',
+  'app.js',
+  'app-memory.js',
+  'app-planner.js',
+  'style.css',
+  'manifest.json',
+  'icon-192.png',
+  'icon-512.png',
+  'icon-maskable-512.png',
+  'apple-touch-icon.png'
+];
+
+self.addEventListener('install', (e) => {
+  e.waitUntil(
+    caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())
+  );
+});
+
+self.addEventListener('activate', (e) => {
+  e.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', (e) => {
+  const req = e.request;
+  if (req.method !== 'GET') return; // 不拦截写请求（含 GitHub API 的 PUT 同步）
+
+  const url = new URL(req.url);
+
+  // 导航请求：网络优先，离线回退缓存首页
+  if (req.mode === 'navigate') {
+    e.respondWith(
+      fetch(req)
+        .then((r) => { const cp = r.clone(); caches.open(CACHE).then((c) => c.put('index.html', cp)); return r; })
+        .catch(() => caches.match('index.html').then((m) => m || caches.match('./')))
+    );
+    return;
+  }
+
+  // 跨域 CDN（如 MathJax）：cache-first，支持离线渲染公式
+  if (url.origin !== location.origin) {
+    e.respondWith(
+      caches.open(CACHE).then(async (c) => {
+        const cached = await c.match(req);
+        if (cached) return cached;
+        try {
+          const r = await fetch(req);
+          c.put(req, r.clone());
+          return r;
+        } catch {
+          return cached || Response.error();
+        }
+      })
+    );
+    return;
+  }
+
+  // 同源静态资源（js/css/图片/题库/json）：stale-while-revalidate
+  e.respondWith(
+    caches.open(CACHE).then(async (c) => {
+      const cached = await c.match(req);
+      const network = fetch(req)
+        .then((r) => { c.put(req, r.clone()); return r; })
+        .catch(() => null);
+      return cached || network;
+    })
+  );
+});
