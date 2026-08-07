@@ -330,12 +330,16 @@ const CloudSync = {
         try { data[key] = JSON.parse(localStorage.getItem(key)); } catch {}
       }
     }
+    // 推送前自愈：保证上云的永远是干净的（不会反向污染云端）
+    try { _repairAllData(data); } catch (e) { console.warn('repair before push failed', e); }
     return data;
   },
 
   // 将云端数据写入本地
   applyToLocal(cloudData) {
     if (!cloudData) return;
+    // 拉取后自愈：保证写到 localStorage 的是干净的
+    try { _repairAllData(cloudData); } catch (e) { console.warn('repair after pull failed', e); }
     for (const key in cloudData) {
       if (key.startsWith('ky_') && !this.SECRET_KEYS.includes(key)) {
         localStorage.setItem(key, JSON.stringify(cloudData[key]));
@@ -411,6 +415,83 @@ function _recordQuality(rec) {
   });
   return fields ? score / fields : 0;
 }
+// ===== Mojibake 自愈：迭代 UTF-8 解码（5-7 层嵌套 mojibake 通用） =====
+// 浏览器与 Node 18+ 都有 TextDecoder，等效 Python 的 s.encode('latin-1').decode('utf-8')
+function _repairMojibake(s) {
+  if (typeof s !== 'string' || !s) return s;
+  // 用 TextDecoder 探测：能解码 + 解码后不是自己 + 解码后包含中文字符 → 替换并继续
+  let cur = s;
+  for (let i = 0; i < 8; i++) {
+    let bytes = null;
+    try {
+      bytes = new Uint8Array(cur.length);
+      let bad = false;
+      for (let j = 0; j < cur.length; j++) {
+        const c = cur.charCodeAt(j);
+        if (c > 0xff) { bad = true; break; }
+        bytes[j] = c;
+      }
+      if (bad) break;
+      const dec = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      if (!dec || dec === cur) break;
+      cur = dec;
+      // 终止条件：当前字符串中文字符比例 ≥ 0.3（典型中文文本）
+      let cn = 0;
+      for (let j = 0; j < cur.length; j++) {
+        const code = cur.charCodeAt(j);
+        if (code >= 0x4e00 && code <= 0x9fff) cn++;
+      }
+      if (cn / cur.length >= 0.3) break;
+    } catch (e) { break; }
+  }
+  return cur;
+}
+function _repairRecord(rec) {
+  if (!rec || typeof rec !== 'object') return rec;
+  ['source','ref','note','content'].forEach(k => {
+    if (rec[k] && typeof rec[k] === 'string') {
+      const fixed = _repairMojibake(rec[k]);
+      // 接受条件：原文含 mojibake 标记 或 修复后中文字符更多
+      if (_isMojibake(rec[k]) || _chineseRatio(fixed) > _chineseRatio(rec[k])) {
+        rec[k] = fixed;
+      }
+    }
+  });
+  return rec;
+}
+function _repairAllData(data) {
+  if (!data || typeof data !== 'object') return data;
+  let fixed = 0;
+  Object.keys(data).forEach(k => {
+    if (Array.isArray(data[k])) {
+      data[k].forEach(r => {
+        if (r && typeof r === 'object') {
+          const before = JSON.stringify(r);
+          _repairRecord(r);
+          if (JSON.stringify(r) !== before) fixed++;
+        }
+      });
+    } else if (data[k] && typeof data[k] === 'object') {
+      Object.keys(data[k]).forEach(kk => {
+        if (typeof data[k][kk] === 'string' && _isMojibake(data[k][kk])) {
+          const fixed_v = _repairMojibake(data[k][kk]);
+          if (_chineseRatio(fixed_v) > _chineseRatio(data[k][kk])) {
+            data[k][kk] = fixed_v;
+            fixed++;
+          }
+        }
+      });
+    } else if (typeof data[k] === 'string' && _isMojibake(data[k])) {
+      const fixed_v = _repairMojibake(data[k]);
+      if (_chineseRatio(fixed_v) > _chineseRatio(data[k])) {
+        data[k] = fixed_v;
+        fixed++;
+      }
+    }
+  });
+  if (fixed > 0) console.log('[自愈] 修复了 ' + fixed + ' 个 mojibake 字段');
+  return data;
+}
 function smartMerge(local, cloud) {
   const merged = {};
   const keys = new Set([
@@ -441,10 +522,8 @@ function smartMerge(local, cloud) {
           byId.set('__' + Math.random(), x);
         }
       });
-      const seen = new Set(c.filter((x) => x && x.id != null).map((x) => x.id));
-      const arr = c.slice();
-      l.forEach((x) => { if (x && x.id != null && !seen.has(x.id)) arr.push(x); });
-      merged[k] = arr;
+      // ✅ 修复：直接用 byId 最终值（已包含智能优选），不再用错的 arr=c.slice()+ 仅追加
+      merged[k] = Array.from(byId.values());
     } else if (l && typeof l === 'object' && c && typeof c === 'object') {
       merged[k] = { ...c, ...l };
     } else {
@@ -4691,6 +4770,23 @@ function delMemo(id) {
 
 // ===== 初始化 =====
 function init() {
+  // 自愈：扫描 localStorage，发现 mojibake 当场修复
+  try {
+    const seenKeys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith('ky_') || k === 'ky_syncConfig' || k === 'ky_aiConfig') continue;
+      try {
+        const v = JSON.parse(localStorage.getItem(k));
+        _repairAllData({ [k]: v });
+        // 写回
+        localStorage.setItem(k, JSON.stringify(v));
+        seenKeys.push(k);
+      } catch {}
+    }
+    if (seenKeys.length) console.log('[init] 已扫描 ' + seenKeys.length + ' 个 ky_ 键，启动期自愈');
+  } catch (e) { console.warn('init self-heal failed', e); }
+
   // [v2/T03] 数据迁移：必须在任何模块渲染之前执行，且失败不阻塞启动
   try {
     const mg = migrateV1toV2();
