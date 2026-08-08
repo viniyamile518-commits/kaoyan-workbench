@@ -3457,6 +3457,12 @@ const PRACTICE_SCORE_LABELS = { 4: '完全掌握', 3: '基本掌握', 2: '半生
 
 // 当前正在内联编辑的练习记录 id（null 表示无）
 let editingPracticeId = null;
+// 练习历史展开状态：记录哪些题（以该组「最新一次」记录的 id 为键）已展开「重做历史」
+let expandedPracticeHist = new Set();
+// 练习历史查看模式：
+//   'latest'（默认）= 列表/检索按「每题最新一次」覆盖，统计也按此；
+//   'all'    = 列表展开显示全部重做记录（含第一次做的原始记录），统计仍按每题最新。
+let practiceLogView = 'latest';
 
 // 把 4 问得分映射到掌握程度筛选桶
 function practiceMasteryBucket(score) {
@@ -3577,6 +3583,7 @@ modules['math-practice'] = (c) => {
           <option value="r4plus">第4次及以上</option>
         </select>
         <button class="btn btn-outline btn-sm" style="font-size:11px;" onclick="resetPracticeFilters()">重置筛选</button>
+        <button class="btn btn-outline btn-sm" id="practiceViewToggle" style="font-size:11px;margin-left:auto;" onclick="togglePracticeAllRecords()" title="切换：每题最新 / 含全部重做记录（保留第一次做的原始记录）">🗂 全部记录</button>
       </div>
       <div id="practiceList"></div>
     </div>
@@ -3695,6 +3702,31 @@ function renderPracticeLog() {
     return true;
   });
 
+  // 「全部记录」模式：列表/检索展开显示每一道重做记录（含第一次做的原始记录），
+  // 每条记录按自身评分判定掌握度；统计仍按每题最新一次，不受此模式影响。
+  let renderList;
+  if (practiceLogView === 'all') {
+    renderList = records.filter(r => {
+      const score = (r.q1?1:0) + (r.q2?1:0) + (r.q3?1:0) + (r.q4?1:0);
+      if (source !== 'all' && r.source !== source) return false;
+      if (mastery !== 'all' && practiceMasteryBucket(score) !== mastery) return false;
+      if (from && r.date < from) return false;
+      if (to && r.date > to) return false;
+      if (retry !== 'all') {
+        const isOrig = !r.retryOf;
+        const at = r.attempt || 0;
+        if (retry === 'orig' && !isOrig) return false;
+        if (retry === 'r1' && at !== 1) return false;
+        if (retry === 'r2' && at !== 2) return false;
+        if (retry === 'r3' && at !== 3) return false;
+        if (retry === 'r4plus' && at < 4) return false;
+      }
+      return true;
+    });
+  } else {
+    renderList = [...filtered];
+  }
+
   // 统计（永远基于全部记录 = 全部题的最新一次，与列表同源）
   const statTotal = document.getElementById('statTotal');
   const statPass = document.getElementById('statPass');
@@ -3714,25 +3746,27 @@ function renderPracticeLog() {
     statFail.textContent = fail;
   }
 
-  if (!filtered.length && !editingPracticeId) {
+  if (!renderList.length && !editingPracticeId) {
     el.innerHTML = '<div class="empty-state"><div class="empty-state-text">没有符合条件的练习记录~</div></div>';
     return;
   }
 
-  let renderList = [...filtered].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+  let sortedList = [...renderList].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
   // 修复：重做/编辑自动创建的新记录可能不满足当前筛选条件，
   // 强制把正在编辑的记录放入渲染列表顶部，避免编辑窗口被筛选隐藏
   if (editingPracticeId) {
     const editingRec = records.find(r => r.id === editingPracticeId);
-    if (editingRec && !renderList.some(r => r.id === editingPracticeId)) {
-      renderList = [editingRec, ...renderList];
+    if (editingRec && !sortedList.some(r => r.id === editingPracticeId)) {
+      sortedList = [editingRec, ...sortedList];
     }
   }
 
-  el.innerHTML = renderList.map(r => {
+  el.innerHTML = sortedList.map(r => {
     if (r.id === editingPracticeId) return renderPracticeEditRow(r);
     const score = (r.q1?1:0) + (r.q2?1:0) + (r.q3?1:0) + (r.q4?1:0);
-    return renderPracticeViewRow(r, score);
+    // 最新模式下，为每条记录附上「重做历史」展开区（保留第一次做的原始记录）
+    const group = practiceLogView === 'latest' ? (groups[rootKeyOf(r)] || [r]) : null;
+    return renderPracticeViewRow(r, score, group);
   }).join('');
 
   // 编辑行渲染后给 4 问勾选标签上色
@@ -3742,10 +3776,17 @@ function renderPracticeLog() {
 }
 
 // 练习历史 —— 普通展示行
-function renderPracticeViewRow(r, score) {
+// group：该记录所属题的全部重做记录数组（仅在「每题最新」模式下传入，用于展开「重做历史」）
+function renderPracticeViewRow(r, score, group) {
   const color = PRACTICE_SCORE_COLORS[score];
   const label = PRACTICE_SCORE_LABELS[score];
   const retryTag = r.retryOf ? `<span class="tag tag-orange" style="font-size:11px;">↻ 第${(r.attempt||1)}次重做</span>` : '';
+  const hasHist = group && group.length > 1;
+  const expanded = expandedPracticeHist.has(r.id);
+  const histToggle = hasHist
+    ? `<button class="btn btn-outline btn-sm" style="font-size:11px;" onclick="togglePracticeHist('${r.id}')" title="展开/收起重做历史（含第一次做的原始记录）">${expanded ? '▾' : '▸'} 重做历史 (${group.length}次)</button>`
+    : '';
+  const histBlock = hasHist ? renderPracticeHistBlock(group, expanded) : '';
   return `
     <div class="todo-item" style="flex-wrap:wrap;gap:6px;">
       <div style="flex:1;min-width:200px;">
@@ -3766,11 +3807,56 @@ function renderPracticeViewRow(r, score) {
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;">
         <span style="font-size:12px;font-weight:700;padding:3px 10px;border-radius:12px;background:${color}22;color:${color};">${score}/4 ${label}</span>
+        ${histToggle}
         <button class="btn btn-outline btn-sm" style="font-size:11px;" onclick="editPractice('${r.id}')">✏️ 编辑</button>
         ${score < 4 ? `<button class="btn btn-outline btn-sm" style="font-size:11px;" onclick="retryPractice('${r.id}')">🔁 重做</button>` : ''}
         <button class="todo-delete" onclick="delPractice('${r.id}')">✕</button>
       </div>
-    </div>`;
+    </div>
+    ${histBlock}`;
+}
+
+// 重做历史展开块：按重做次数升序列出该题全部记录（含第一次做的原始记录）
+function renderPracticeHistBlock(group, expanded) {
+  if (!expanded) return '';
+  const sorted = group.slice().sort((a, b) =>
+    (a.attempt || 0) - (b.attempt || 0) || a.date.localeCompare(b.date) || a.id.localeCompare(b.id)
+  );
+  return `<div style="flex-basis:100%;margin-top:8px;padding:8px 10px;background:var(--bg-secondary);border-radius:8px;border-left:3px solid var(--accent);">
+    <div style="font-size:11px;color:var(--text-light);margin-bottom:6px;">↻ 重做轨迹（含第一次做的原始记录，按"第几次做"排序）</div>
+    ${sorted.map((rec, idx) => {
+      const sc = (rec.q1?1:0) + (rec.q2?1:0) + (rec.q3?1:0) + (rec.q4?1:0);
+      const isOrig = !rec.retryOf;
+      const ord = isOrig ? '① 第一次做' : `第${rec.attempt || 1}次重做`;
+      const scColor = PRACTICE_SCORE_COLORS[sc];
+      const isLatest = idx === sorted.length - 1;
+      return `<div style="display:flex;gap:8px;align-items:flex-start;font-size:12px;padding:4px 0;${idx ? 'border-top:1px dashed var(--border);' : ''}">
+        <span style="flex-shrink:0;min-width:84px;color:var(--text-light);">${rec.date}</span>
+        <span class="tag ${isOrig ? 'tag-blue' : 'tag-orange'}" style="font-size:10px;flex-shrink:0;">${ord}</span>
+        <span style="font-weight:600;color:${scColor};flex-shrink:0;">${sc}/4</span>
+        ${isLatest ? '<span class="tag" style="font-size:10px;flex-shrink:0;background:#27ae6022;color:#27ae60;">最新</span>' : ''}
+        ${rec.note ? `<span style="color:var(--text-secondary);flex:1;">📝 ${escapeHtml(rec.note)}</span>` : '<span style="flex:1;"></span>'}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+// 展开/收起某题的重做历史
+function togglePracticeHist(id) {
+  if (expandedPracticeHist.has(id)) expandedPracticeHist.delete(id);
+  else expandedPracticeHist.add(id);
+  renderPracticeLog();
+}
+
+// 切换练习历史查看模式：每题最新 / 含全部重做记录
+function togglePracticeAllRecords() {
+  practiceLogView = practiceLogView === 'latest' ? 'all' : 'latest';
+  const btn = document.getElementById('practiceViewToggle');
+  if (btn) {
+    btn.textContent = practiceLogView === 'all' ? '📌 每题最新' : '🗂 全部记录';
+    btn.classList.toggle('btn-primary', practiceLogView === 'all');
+  }
+  renderPracticeLog();
 }
 
 // 练习历史 —— 内联编辑行
