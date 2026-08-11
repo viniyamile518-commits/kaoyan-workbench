@@ -3459,10 +3459,30 @@ const PRACTICE_SCORE_LABELS = { 4: '完全掌握', 3: '基本掌握', 2: '半生
 let editingPracticeId = null;
 // 练习历史展开状态：记录哪些题（以该组「最新一次」记录的 id 为键）已展开「重做历史」
 let expandedPracticeHist = new Set();
-// 练习历史查看模式：
-//   'latest'（默认）= 列表/检索按「每题最新一次」覆盖，统计也按此；
-//   'all'    = 列表展开显示全部重做记录（含第一次做的原始记录），统计仍按每题最新。
-let practiceLogView = 'latest';
+// 练习历史筛选状态（单一数据源）：整页重渲染（如同步后）也不会丢失，除非用户手动改
+const practiceFilterState = {
+  source: 'all', mastery: 'all', from: '', to: '', retry: 'all', scope: 'latest'
+};
+function _pfSet(id, val) { const e = document.getElementById(id); if (e && val != null) e.value = val; }
+// 把持久化的筛选状态写回 DOM（用于整页重渲染后恢复，实现"不主动刷新"）
+function restorePracticeFilterDOM() {
+  _pfSet('practiceFilter', practiceFilterState.source);
+  _pfSet('practiceMastery', practiceFilterState.mastery);
+  _pfSet('practiceFrom', practiceFilterState.from);
+  _pfSet('practiceTo', practiceFilterState.to);
+  _pfSet('practiceRetry', practiceFilterState.retry);
+  _pfSet('practiceScope', practiceFilterState.scope);
+}
+// 下拉框 onchange：先把 DOM 最新值同步进 state，再渲染
+function onPracticeFilterChange() {
+  practiceFilterState.source = (document.getElementById('practiceFilter') || {}).value || 'all';
+  practiceFilterState.mastery = (document.getElementById('practiceMastery') || {}).value || 'all';
+  practiceFilterState.from = (document.getElementById('practiceFrom') || {}).value || '';
+  practiceFilterState.to = (document.getElementById('practiceTo') || {}).value || '';
+  practiceFilterState.retry = (document.getElementById('practiceRetry') || {}).value || 'all';
+  practiceFilterState.scope = (document.getElementById('practiceScope') || {}).value || 'latest';
+  renderPracticeLog();
+}
 
 // 把 4 问得分映射到掌握程度筛选桶
 function practiceMasteryBucket(score) {
@@ -3554,7 +3574,7 @@ modules['math-practice'] = (c) => {
     <div class="card">
       <div class="card-title" style="margin:0 0 12px;">📖 练习历史</div>
       <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
-        <select class="select" id="practiceFilter" style="width:108px;font-size:12px;" onchange="renderPracticeLog()" title="按来源筛选">
+        <select class="select" id="practiceFilter" style="width:108px;font-size:12px;" onchange="onPracticeFilterChange()" title="按来源筛选">
           <option value="all">全部来源</option>
           <option value="题库">题库</option>
           <option value="课本例题">课本例题</option>
@@ -3564,17 +3584,17 @@ modules['math-practice'] = (c) => {
           <option value="真题">真题</option>
           <option value="其他">其他</option>
         </select>
-        <select class="select" id="practiceMastery" style="width:130px;font-size:12px;" onchange="renderPracticeLog()" title="按掌握程度筛选">
+        <select class="select" id="practiceMastery" style="width:130px;font-size:12px;" onchange="onPracticeFilterChange()" title="按掌握程度筛选">
           <option value="all">全部掌握度</option>
           <option value="pass4">完全掌握(4/4)</option>
           <option value="pass3">基本掌握(3/4)</option>
           <option value="pass2">半生不熟(2/4)</option>
           <option value="pass01">未掌握(0-1/4)</option>
         </select>
-        <input class="input" id="practiceFrom" type="date" style="width:140px;font-size:12px;" onchange="renderPracticeLog()" title="起始日期">
+        <input class="input" id="practiceFrom" type="date" style="width:140px;font-size:12px;" onchange="onPracticeFilterChange()" title="起始日期">
         <span style="font-size:12px;color:var(--text-light);">至</span>
-        <input class="input" id="practiceTo" type="date" style="width:140px;font-size:12px;" onchange="renderPracticeLog()" title="结束日期">
-        <select class="select" id="practiceRetry" style="width:130px;font-size:12px;" onchange="renderPracticeLog()" title="按重做次数筛选">
+        <input class="input" id="practiceTo" type="date" style="width:140px;font-size:12px;" onchange="onPracticeFilterChange()" title="结束日期">
+        <select class="select" id="practiceRetry" style="width:130px;font-size:12px;" onchange="onPracticeFilterChange()" title="按重做次数筛选">
           <option value="all">全部重做</option>
           <option value="orig">原始题(未重做)</option>
           <option value="r1">第1次重做</option>
@@ -3583,7 +3603,10 @@ modules['math-practice'] = (c) => {
           <option value="r4plus">第4次及以上</option>
         </select>
         <button class="btn btn-outline btn-sm" style="font-size:11px;" onclick="resetPracticeFilters()">重置筛选</button>
-        <button class="btn btn-outline btn-sm" id="practiceViewToggle" style="font-size:11px;margin-left:auto;" onclick="togglePracticeAllRecords()" title="切换：每题最新 / 含全部重做记录（保留第一次做的原始记录）">🗂 全部记录</button>
+        <select class="select" id="practiceScope" style="width:150px;font-size:12px;margin-left:auto;" onchange="onPracticeFilterChange()" title="筛选范围：仅最新一次 = 每题只看最新评价（覆盖式）；全部做题历史 = 展开每次重做记录，可按「程度」筛出所有错题、反复刷">
+          <option value="latest">仅最新一次</option>
+          <option value="all">全部做题历史</option>
+        </select>
       </div>
       <div id="practiceList"></div>
     </div>
@@ -3641,17 +3664,13 @@ function renderPracticeLog() {
   const el = document.getElementById('practiceList');
   if (!el) return;
 
-  // 读取四个筛选维度（来源 / 掌握程度 / 起止日期），缺省容错
-  const fSource = document.getElementById('practiceFilter');
-  const fMastery = document.getElementById('practiceMastery');
-  const fFrom = document.getElementById('practiceFrom');
-  const fTo = document.getElementById('practiceTo');
-  const source = fSource ? fSource.value : 'all';
-  const mastery = fMastery ? fMastery.value : 'all';
-  const from = fFrom ? fFrom.value : '';
-  const to = fTo ? fTo.value : '';
-  const fRetry = document.getElementById('practiceRetry');
-  const retry = fRetry ? fRetry.value : 'all';
+  // 整页重渲染（如同步后）恢复持久化筛选状态到 DOM，再统一从 state 读取（实现"不主动刷新"）
+  restorePracticeFilterDOM();
+  const source = practiceFilterState.source;
+  const mastery = practiceFilterState.mastery;
+  const from = practiceFilterState.from;
+  const to = practiceFilterState.to;
+  const retry = practiceFilterState.retry;
 
   // === 以"每题最新一次"为唯一维度（覆盖式） ===
   // 同一题的原始记录 + 全部重做记录归为 1 题；归组键 = 沿 retryOf 链回溯到根原始记录（ref 或 id）。
@@ -3705,7 +3724,7 @@ function renderPracticeLog() {
   // 「全部记录」模式：列表/检索展开显示每一道重做记录（含第一次做的原始记录），
   // 每条记录按自身评分判定掌握度；统计仍按每题最新一次，不受此模式影响。
   let renderList;
-  if (practiceLogView === 'all') {
+  if (practiceFilterState.scope === 'all') {
     renderList = records.filter(r => {
       const score = (r.q1?1:0) + (r.q2?1:0) + (r.q3?1:0) + (r.q4?1:0);
       if (source !== 'all' && r.source !== source) return false;
@@ -3765,7 +3784,7 @@ function renderPracticeLog() {
     if (r.id === editingPracticeId) return renderPracticeEditRow(r);
     const score = (r.q1?1:0) + (r.q2?1:0) + (r.q3?1:0) + (r.q4?1:0);
     // 最新模式下，为每条记录附上「重做历史」展开区（保留第一次做的原始记录）
-    const group = practiceLogView === 'latest' ? (groups[rootKeyOf(r)] || [r]) : null;
+    const group = practiceFilterState.scope === 'latest' ? (groups[rootKeyOf(r)] || [r]) : null;
     return renderPracticeViewRow(r, score, group);
   }).join('');
 
@@ -3780,7 +3799,9 @@ function renderPracticeLog() {
 function renderPracticeViewRow(r, score, group) {
   const color = PRACTICE_SCORE_COLORS[score];
   const label = PRACTICE_SCORE_LABELS[score];
-  const retryTag = r.retryOf ? `<span class="tag tag-orange" style="font-size:11px;">↻ 第${(r.attempt||1)}次重做</span>` : '';
+  const retryTag = r.retryOf
+    ? `<span class="tag tag-orange" style="font-size:11px;">↻ 第${(r.attempt||1)}次重做</span>`
+    : `<span class="tag tag-blue" style="font-size:11px;">① 第一次做</span>`;
   const hasHist = group && group.length > 1;
   const expanded = expandedPracticeHist.has(r.id);
   const histToggle = hasHist
@@ -3848,16 +3869,7 @@ function togglePracticeHist(id) {
   renderPracticeLog();
 }
 
-// 切换练习历史查看模式：每题最新 / 含全部重做记录
-function togglePracticeAllRecords() {
-  practiceLogView = practiceLogView === 'latest' ? 'all' : 'latest';
-  const btn = document.getElementById('practiceViewToggle');
-  if (btn) {
-    btn.textContent = practiceLogView === 'all' ? '📌 每题最新' : '🗂 全部记录';
-    btn.classList.toggle('btn-primary', practiceLogView === 'all');
-  }
-  renderPracticeLog();
-}
+// （练习历史范围已并入筛选下拉 #practiceScope，状态由 practiceFilterState 单一管理，见 onPracticeFilterChange）
 
 // 练习历史 —— 内联编辑行
 function renderPracticeEditRow(r) {
@@ -3946,11 +3958,13 @@ function savePracticeEdit(id) {
 }
 
 function resetPracticeFilters() {
-  const a = document.getElementById('practiceFilter'); if (a) a.value = 'all';
-  const b = document.getElementById('practiceMastery'); if (b) b.value = 'all';
-  const e = document.getElementById('practiceRetry'); if (e) e.value = 'all';
-  const c = document.getElementById('practiceFrom'); if (c) c.value = '';
-  const d = document.getElementById('practiceTo'); if (d) d.value = '';
+  practiceFilterState.source = 'all';
+  practiceFilterState.mastery = 'all';
+  practiceFilterState.from = '';
+  practiceFilterState.to = '';
+  practiceFilterState.retry = 'all';
+  practiceFilterState.scope = 'latest';
+  restorePracticeFilterDOM();
   renderPracticeLog();
 }
 
