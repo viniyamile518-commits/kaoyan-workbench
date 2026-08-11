@@ -3462,7 +3462,7 @@ let editingPracticeId = null;
 let expandedPracticeHist = new Set();
 // 练习历史筛选状态（单一数据源）：整页重渲染（如同步后）也不会丢失，除非用户手动改
 const practiceFilterState = {
-  source: 'all', mastery: 'all', from: '', to: '', retry: 'all', scope: 'latest'
+  source: 'all', mastery: 'all', from: '', to: '', retry: 'all', scope: 'latest', wrong: 'all'
 };
 function _pfSet(id, val) { const e = document.getElementById(id); if (e && val != null) e.value = val; }
 // 把持久化的筛选状态写回 DOM（用于整页重渲染后恢复，实现"不主动刷新"）
@@ -3473,6 +3473,7 @@ function restorePracticeFilterDOM() {
   _pfSet('practiceTo', practiceFilterState.to);
   _pfSet('practiceRetry', practiceFilterState.retry);
   _pfSet('practiceScope', practiceFilterState.scope);
+  _pfSet('practiceWrong', practiceFilterState.wrong);
 }
 // 下拉框 onchange：先把 DOM 最新值同步进 state，再渲染
 function onPracticeFilterChange() {
@@ -3482,6 +3483,7 @@ function onPracticeFilterChange() {
   practiceFilterState.to = (document.getElementById('practiceTo') || {}).value || '';
   practiceFilterState.retry = (document.getElementById('practiceRetry') || {}).value || 'all';
   practiceFilterState.scope = (document.getElementById('practiceScope') || {}).value || 'latest';
+  practiceFilterState.wrong = (document.getElementById('practiceWrong') || {}).value || 'all';
   renderPracticeLog();
 }
 
@@ -3491,6 +3493,24 @@ function practiceMasteryBucket(score) {
   if (score === 3) return 'pass3';
   if (score === 2) return 'pass2';
   return 'pass01';
+}
+
+// 累计做错次数：该题全部历史中「得分<4/4」的尝试次数（含已重做掌握前的失败记录）。
+// 例：一道题 第一次错、重做1错、重做2全对 → 错2次。用于"哪道题我错的次数更多"。
+function wrongCountOf(group) {
+  if (!Array.isArray(group)) return 0;
+  let n = 0;
+  group.forEach(rec => {
+    const s = (rec.q1 ? 1 : 0) + (rec.q2 ? 1 : 0) + (rec.q3 ? 1 : 0) + (rec.q4 ? 1 : 0);
+    if (s < 4) n++;
+  });
+  return n;
+}
+function wrongBucketOf(n) {
+  if (n <= 0) return 'wrong0';
+  if (n === 1) return 'wrong1';
+  if (n === 2) return 'wrong2';
+  return 'wrong3plus';
 }
 
 modules['math-practice'] = (c) => {
@@ -3603,6 +3623,13 @@ modules['math-practice'] = (c) => {
           <option value="r3">第3次重做</option>
           <option value="r4plus">第4次及以上</option>
         </select>
+        <select class="select" id="practiceWrong" style="width:140px;font-size:12px;" onchange="onPracticeFilterChange()" title="按该题「累计做错次数」筛选（错=某次得分<4/4，含已重做掌握前的失败记录）。便于看哪道题错的次数更多、反复刷">
+          <option value="all">全部错题次数</option>
+          <option value="wrong0">从未错(全对)</option>
+          <option value="wrong1">错1次</option>
+          <option value="wrong2">错2次</option>
+          <option value="wrong3plus">错3次及以上</option>
+        </select>
         <button class="btn btn-outline btn-sm" style="font-size:11px;" onclick="resetPracticeFilters()">重置筛选</button>
         <select class="select" id="practiceScope" style="width:150px;font-size:12px;margin-left:auto;" onchange="onPracticeFilterChange()" title="筛选范围：仅最新一次 = 每题只看最新评价（覆盖式）；全部做题历史 = 展开每次重做记录，可按「程度」筛出所有错题、反复刷">
           <option value="latest">仅最新一次</option>
@@ -3702,6 +3729,9 @@ function renderPracticeLog() {
       b.id.localeCompare(a.id)
     )[0];
   });
+  // 每题累计做错次数（用于「错题次数」筛选 + 行内标签）
+  const wrongCountMap = {};
+  Object.keys(groups).forEach(k => { wrongCountMap[k] = wrongCountOf(groups[k]); });
 
   // 在"每题最新一次"上应用筛选
   const filtered = latestPerGroup.filter(r => {
@@ -3719,6 +3749,7 @@ function renderPracticeLog() {
       if (retry === 'r3' && at !== 3) return false;
       if (retry === 'r4plus' && at < 4) return false;
     }
+    if (practiceFilterState.wrong !== 'all' && wrongBucketOf(wrongCountMap[rootKeyOf(r)]) !== practiceFilterState.wrong) return false;
     return true;
   });
 
@@ -3741,6 +3772,7 @@ function renderPracticeLog() {
         if (retry === 'r3' && at !== 3) return false;
         if (retry === 'r4plus' && at < 4) return false;
       }
+      if (practiceFilterState.wrong !== 'all' && wrongBucketOf(wrongCountMap[rootKeyOf(r)]) !== practiceFilterState.wrong) return false;
       return true;
     });
   } else {
@@ -3786,7 +3818,8 @@ function renderPracticeLog() {
     const score = (r.q1?1:0) + (r.q2?1:0) + (r.q3?1:0) + (r.q4?1:0);
     // 最新模式下，为每条记录附上「重做历史」展开区（保留第一次做的原始记录）
     const group = practiceFilterState.scope === 'latest' ? (groups[rootKeyOf(r)] || [r]) : null;
-    return renderPracticeViewRow(r, score, group);
+    const wrongN = wrongCountOf(groups[rootKeyOf(r)] || [r]);
+    return renderPracticeViewRow(r, score, group, wrongN);
   }).join('');
 
   // 编辑行渲染后给 4 问勾选标签上色
@@ -3797,12 +3830,15 @@ function renderPracticeLog() {
 
 // 练习历史 —— 普通展示行
 // group：该记录所属题的全部重做记录数组（仅在「每题最新」模式下传入，用于展开「重做历史」）
-function renderPracticeViewRow(r, score, group) {
+function renderPracticeViewRow(r, score, group, wrongN) {
   const color = PRACTICE_SCORE_COLORS[score];
   const label = PRACTICE_SCORE_LABELS[score];
   const retryTag = r.retryOf
     ? `<span class="tag tag-orange" style="font-size:11px;">↻ 第${(r.attempt||1)}次重做</span>`
     : `<span class="tag tag-blue" style="font-size:11px;">① 第一次做</span>`;
+  const wrongTag = (wrongN && wrongN > 0)
+    ? `<span class="tag tag-red" style="font-size:11px;">错${wrongN}次</span>`
+    : '';
   const hasHist = group && group.length > 1;
   const expanded = expandedPracticeHist.has(r.id);
   const histToggle = hasHist
@@ -3816,6 +3852,7 @@ function renderPracticeViewRow(r, score, group) {
           <span style="font-size:12px;color:var(--text-light);">${r.date}</span>
           <span class="tag tag-blue" style="font-size:11px;">${escapeHtml(r.source)}</span>
           ${retryTag}
+          ${wrongTag}
           <span style="font-size:14px;font-weight:600;">${escapeHtml(r.ref)}</span>
         </div>
         ${r.content ? `<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">${escapeHtml(r.content)}</div>` : ''}
@@ -3965,6 +4002,7 @@ function resetPracticeFilters() {
   practiceFilterState.to = '';
   practiceFilterState.retry = 'all';
   practiceFilterState.scope = 'latest';
+  practiceFilterState.wrong = 'all';
   restorePracticeFilterDOM();
   renderPracticeLog();
 }
