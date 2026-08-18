@@ -1,5 +1,5 @@
 // 考研工作台 Service Worker —— 离线缓存 + PWA 安装支持
-const CACHE = 'ky-wb-v3';
+const CACHE = 'ky-wb-v4';
 const SHELL = [
   './',
   'index.html',
