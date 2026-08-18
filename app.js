@@ -3486,6 +3486,29 @@ function onPracticeFilterChange() {
   renderPracticeLog();
 }
 
+// 统计卡快捷筛选：点击卡片直接套用对应掌握程度桶
+// mastery: 'all' | 'pass4' | 'pass3' | 'pass01'
+function filterPracticeByStat(mastery) {
+  practiceFilterState.mastery = mastery;
+  restorePracticeFilterDOM();
+  renderPracticeLog();
+}
+
+// 高亮当前激活的统计卡（与 practiceFilterState.mastery 一致的那张）
+function updateStatCardActive() {
+  const cards = document.querySelectorAll('[data-mastery]');
+  const cur = practiceFilterState.mastery || 'all';
+  cards.forEach(c => {
+    if (c.dataset.mastery === cur) {
+      c.style.boxShadow = '0 0 0 2px var(--accent)';
+      c.style.background = 'rgba(74, 158, 255, 0.06)';
+    } else {
+      c.style.boxShadow = '';
+      c.style.background = '';
+    }
+  });
+}
+
 // 把 4 问得分映射到掌握程度筛选桶
 // 未掌握 = 4 问只达到两问及以下（得分 ≤ 2）；3 = 基本掌握；4 = 完全掌握
 function practiceMasteryBucket(score) {
@@ -3575,19 +3598,19 @@ modules['math-practice'] = (c) => {
     </div>
 
     <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
-      <div class="card" style="flex:1;min-width:120px;padding:12px 16px;text-align:center;">
+      <div class="card" data-mastery="all" onclick="filterPracticeByStat('all')" title="点击：清除掌握程度筛选，显示全部" style="flex:1;min-width:120px;padding:12px 16px;text-align:center;cursor:pointer;">
         <div style="font-size:24px;font-weight:800;color:var(--accent);" id="statTotal">0</div>
         <div style="font-size:11px;color:var(--text-light);">总练习</div>
       </div>
-      <div class="card" style="flex:1;min-width:120px;padding:12px 16px;text-align:center;">
+      <div class="card" data-mastery="pass4" onclick="filterPracticeByStat('pass4')" title="点击：只显示完全掌握(4/4) 的题" style="flex:1;min-width:120px;padding:12px 16px;text-align:center;cursor:pointer;">
         <div style="font-size:24px;font-weight:800;color:#27ae60;" id="statPass">0</div>
         <div style="font-size:11px;color:var(--text-light);">完全掌握(4/4)</div>
       </div>
-      <div class="card" style="flex:1;min-width:120px;padding:12px 16px;text-align:center;">
+      <div class="card" data-mastery="pass3" onclick="filterPracticeByStat('pass3')" title="点击：只显示基本掌握(3/4) 的题" style="flex:1;min-width:120px;padding:12px 16px;text-align:center;cursor:pointer;">
         <div style="font-size:24px;font-weight:800;color:#f39c12;" id="statHalf">0</div>
         <div style="font-size:11px;color:var(--text-light);">基本掌握(3/4)</div>
       </div>
-      <div class="card" style="flex:1;min-width:120px;padding:12px 16px;text-align:center;">
+      <div class="card" data-mastery="pass01" onclick="filterPracticeByStat('pass01')" title="点击：只显示未掌握(0-2/4) 的题（含需重做的薄弱项）" style="flex:1;min-width:120px;padding:12px 16px;text-align:center;cursor:pointer;">
         <div style="font-size:24px;font-weight:800;color:#e74c3c;" id="statFail">0</div>
         <div style="font-size:11px;color:var(--text-light);">未掌握(0-2/4)</div>
       </div>
@@ -3798,6 +3821,7 @@ function renderPracticeLog() {
     statPass.textContent = pass;
     statHalf.textContent = half;
     statFail.textContent = fail;
+    updateStatCardActive();
   }
 
   if (!renderList.length && !editingPracticeId) {
