@@ -3452,8 +3452,8 @@ const PRACTICE_4Q = [
   { key: 'q4', label: '举一反三', desc: '把数字换一组，还能做出来' }
 ];
 
-const PRACTICE_SCORE_COLORS = { 4: '#27ae60', 3: '#f39c12', 2: '#f39c12', 1: '#e74c3c', 0: '#e74c3c' };
-const PRACTICE_SCORE_LABELS = { 4: '完全掌握', 3: '基本掌握', 2: '半生不熟', 1: '未掌握', 0: '未掌握' };
+const PRACTICE_SCORE_COLORS = { 4: '#27ae60', 3: '#f39c12', 2: '#e74c3c', 1: '#e74c3c', 0: '#e74c3c' };
+const PRACTICE_SCORE_LABELS = { 4: '完全掌握', 3: '基本掌握', 2: '未掌握', 1: '未掌握', 0: '未掌握' };
 
 // 当前正在内联编辑的练习记录 id（null 表示无）
 let editingPracticeId = null;
@@ -3487,10 +3487,10 @@ function onPracticeFilterChange() {
 }
 
 // 把 4 问得分映射到掌握程度筛选桶
+// 未掌握 = 4 问只达到两问及以下（得分 ≤ 2）；3 = 基本掌握；4 = 完全掌握
 function practiceMasteryBucket(score) {
   if (score === 4) return 'pass4';
   if (score === 3) return 'pass3';
-  if (score === 2) return 'pass2';
   return 'pass01';
 }
 
@@ -3509,7 +3509,9 @@ function wrongBucketOf(n) {
   if (n <= 0) return 'wrong0';
   if (n === 1) return 'wrong1';
   if (n === 2) return 'wrong2';
-  return 'wrong3plus';
+  if (n === 3) return 'wrong3';
+  if (n === 4) return 'wrong4';
+  return 'wrong5plus';
 }
 
 modules['math-practice'] = (c) => {
@@ -3583,11 +3585,11 @@ modules['math-practice'] = (c) => {
       </div>
       <div class="card" style="flex:1;min-width:120px;padding:12px 16px;text-align:center;">
         <div style="font-size:24px;font-weight:800;color:#f39c12;" id="statHalf">0</div>
-        <div style="font-size:11px;color:var(--text-light);">半生不熟(2-3/4)</div>
+        <div style="font-size:11px;color:var(--text-light);">基本掌握(3/4)</div>
       </div>
       <div class="card" style="flex:1;min-width:120px;padding:12px 16px;text-align:center;">
         <div style="font-size:24px;font-weight:800;color:#e74c3c;" id="statFail">0</div>
-        <div style="font-size:11px;color:var(--text-light);">未掌握(0-1/4)</div>
+        <div style="font-size:11px;color:var(--text-light);">未掌握(0-2/4)</div>
       </div>
     </div>
 
@@ -3608,8 +3610,7 @@ modules['math-practice'] = (c) => {
           <option value="all">全部掌握度</option>
           <option value="pass4">完全掌握(4/4)</option>
           <option value="pass3">基本掌握(3/4)</option>
-          <option value="pass2">半生不熟(2/4)</option>
-          <option value="pass01">未掌握(0-1/4)</option>
+          <option value="pass01">未掌握(0-2/4)</option>
         </select>
         <input class="input" id="practiceFrom" type="date" style="width:140px;font-size:12px;" onchange="onPracticeFilterChange()" title="起始日期">
         <span style="font-size:12px;color:var(--text-light);">至</span>
@@ -3622,12 +3623,14 @@ modules['math-practice'] = (c) => {
           <option value="r3">第3次重做</option>
           <option value="r4plus">第4次及以上</option>
         </select>
-        <select class="select" id="practiceWrong" style="width:140px;font-size:12px;" onchange="onPracticeFilterChange()" title="按该题「累计做错次数」筛选（错=某次得分<4/4，含已重做掌握前的失败记录）。便于看哪道题错的次数更多、反复刷">
+        <select class="select" id="practiceWrong" style="width:150px;font-size:12px;" onchange="onPracticeFilterChange()" title="按该题「累计做错次数」筛选（错=某次得分<4/4，含已重做掌握前的失败记录）。拆成错1/2/3/4/5+次，便于看哪道题错的次数更多、反复刷">
           <option value="all">全部错题次数</option>
           <option value="wrong0">从未错(全对)</option>
           <option value="wrong1">错1次</option>
           <option value="wrong2">错2次</option>
-          <option value="wrong3plus">错3次及以上</option>
+          <option value="wrong3">错3次</option>
+          <option value="wrong4">错4次</option>
+          <option value="wrong5plus">错5次及以上</option>
         </select>
         <button class="btn btn-outline btn-sm" style="font-size:11px;" onclick="resetPracticeFilters()">重置筛选</button>
         <select class="select" id="practiceScope" style="width:150px;font-size:12px;margin-left:auto;" onchange="onPracticeFilterChange()" title="筛选范围：仅最新一次 = 每题只看最新评价（覆盖式）；全部做题历史 = 展开每次重做记录，可按「程度」筛出所有错题、反复刷">
@@ -3788,7 +3791,7 @@ function renderPracticeLog() {
     latestPerGroup.forEach(latest => {
       const score = (latest.q1?1:0) + (latest.q2?1:0) + (latest.q3?1:0) + (latest.q4?1:0);
       if (score === 4) pass++;
-      else if (score >= 2) half++;
+      else if (score === 3) half++;
       else fail++;
     });
     statTotal.textContent = latestPerGroup.length;
